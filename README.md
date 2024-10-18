@@ -13,7 +13,8 @@
 ### Instructions
  - Clone the repo and open it in a terminal
 
-       cd /path/to/smith
+       git clone https://github.com/Varrow1/Smith.git
+       cd Smith
 
  - Install the python requirements
 
