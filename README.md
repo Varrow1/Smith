@@ -18,7 +18,7 @@
 
  - Install the python requirements
 
-       pip install -r requrements.txt
+       pip install -r requirements.txt
 
  - Run Smith
 
