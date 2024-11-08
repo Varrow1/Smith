@@ -13,7 +13,7 @@ from vosk import Model, KaldiRecognizer
 from queue import Queue
 from threading import Lock
 
-class JarvisAssistant:
+class SmithAssistant:
     def __init__(self):
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
         
@@ -22,7 +22,7 @@ class JarvisAssistant:
             self.model = Model(model_path="vosk-model-en-us")
             self.recognizer = KaldiRecognizer(self.model, 16000)
         except Exception as e:
-            logging.error(f"Failed to initialize Vosk model: {e}")
+            logging.error(f"Failed to initialize Vosk Voice model: {e}")
             raise
 
         self.engine_lock = Lock()
@@ -30,7 +30,7 @@ class JarvisAssistant:
         
         self.response_cache = {}
         self.user_name = "Sir"
-        self.assistant_name = "Jarvis"
+        self.assistant_name = "Smith"
         self.voice_type = "male"
         self.voice_speed = 180
 
@@ -44,7 +44,7 @@ class JarvisAssistant:
         }
 
         self.engine = self._initialize_engine()
-        self.speak("Jarvis online.")
+        self.speak("Smith Version One. Online.")
 
     def _initialize_engine(self):
         engine = pyttsx3.init()
@@ -112,7 +112,7 @@ class JarvisAssistant:
             messages = [
                 {
                     'role': 'system',
-                    'content': 'You are Jarvis AI assistant. You are working for Mr. Hassan Alnomani, an ambitious young man who made you to help him on his journey like how Jarvis helps Tony Stark.'
+                    'content': 'You are Smith, an AI assistant. You are working for an ambitious person who made you to aid their journey, similar to how Jarvis helps Tony Stark.'
                 },
                 {
                     'role': 'user',
@@ -122,9 +122,8 @@ class JarvisAssistant:
             
             # Use asyncio.to_thread for the synchronous Ollama call
             response = await asyncio.to_thread(
-                ollama.chat,
-                #model= 'tinyllama',  
-                model='llama3.2:1b-instruct-q5_0',
+                ollama.chat,  
+                model='llama3.2:1b-instruct-q5_0', # Replace with desired model. Default: llama3.2:1b-instruct-q5_0
                 messages=messages
             )
             
@@ -170,8 +169,8 @@ class JarvisAssistant:
                 self.speak("Opening notepad")
                 return
 
-        if "search wikipedia" in command:
-            query = command.replace("search wikipedia", "").strip()
+        if "search wikipedia for" in command:
+            query = command.replace("search wikipedia for", "").strip()
             try:
                 result = wikipedia.summary(query, sentences=1)
                 self.speak(result)
@@ -203,8 +202,8 @@ class JarvisAssistant:
                 await self.process_command(command)
 
 async def main():
-    jarvis = JarvisAssistant()
-    await jarvis.run()
+    smith = SmithAssistant()
+    await smith.run()
 
 if __name__ == "__main__":
     asyncio.run(main())
