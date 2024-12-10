@@ -1,4 +1,5 @@
-## Smith
+# S.M.I.T.H.
+## Super Motivated Intelligent Task Helper
 ### An AI assistant writen in Python
 #### (Powered by Ollama)
 
