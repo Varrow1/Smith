@@ -25,6 +25,7 @@ import time
 from apscheduler.schedulers.background import BackgroundScheduler
 import shutil
 from bs4 import BeautifulSoup
+import yaml
 
 class JarvisLogger:
     """Advanced logging system for JARVIS"""
@@ -67,6 +68,9 @@ class JarvisAssistant:
         self.speaker.setProperty('voice', 'english+m3')
         pygame.mixer.init()
         
+        # Initialize memory system
+        self.memory = self.initialize_memory()
+        
         # Initialize volume control
         devices = AudioUtilities.GetSpeakers()
         interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
@@ -108,9 +112,52 @@ class JarvisAssistant:
         self.function_registry = {}
         # Enable self-improvement mode
         self.self_improvement_enabled = True
+        
+        # Initialize additional modules
+        self.social_media = None  # Will be initialized on first use
+
+    def initialize_memory(self):
+        """Initialize the memory system for JARVIS"""
+        try:
+            with open('jarvis_memory.json', 'r') as f:
+                memory = json.load(f)
+            return memory
+        except (FileNotFoundError, json.JSONDecodeError):
+            # Create a new memory structure if file doesn't exist or is corrupted
+            memory = {
+                "conversations": [],
+                "user_preferences": {},
+                "tasks": [],
+                "reminders": [],
+                "last_active": str(datetime.datetime.now())
+            }
+            self.save_memory(memory)
+            return memory
+            
+    def save_memory(self, memory=None):
+        """Save the current memory state to file"""
+        if memory is None:
+            memory = self.memory
+        try:
+            with open('jarvis_memory.json', 'w') as f:
+                json.dump(memory, f, indent=2)
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to save memory: {e}")
+            return False
 
     def speak(self, text):
         print(f"JARVIS: {text}")
+        # Store conversation in memory
+        try:
+            self.memory.setdefault("conversations", []).append({
+                "speaker": "jarvis",
+                "text": text,
+                "timestamp": str(datetime.datetime.now())
+            })
+            self.save_memory()
+        except Exception as e:
+            self.logger.error(f"Failed to store memory: {e}")
         self.speaker.say(text)
         self.speaker.runAndWait()
 
@@ -126,6 +173,18 @@ class JarvisAssistant:
                     audio = self.recognizer.listen(source, timeout=30, phrase_time_limit=60)
                     text = self.recognizer.recognize_google(audio)
                     print(f"Boss said: {text}")
+                    
+                    # Store user conversation in memory
+                    try:
+                        self.memory.setdefault("conversations", []).append({
+                            "speaker": "user",
+                            "text": text,
+                            "timestamp": str(datetime.datetime.now())
+                        })
+                        self.save_memory()
+                    except Exception as e:
+                        self.logger.error(f"Failed to store user input in memory: {e}")
+                    
                     return text.lower()
                 except sr.WaitTimeoutError:
                     self.speak("Still listening, boss. Take your time.")
@@ -170,7 +229,7 @@ class JarvisAssistant:
             The function should be part of the JarvisAssistant class.
             Keep it simple and safe. No imports allowed."""
             
-            response = self.ollama.chat(model='llama3.2:1b-instruct-q5_0', messages=[{
+            response = self.ollama.chat(model='llama3.2:3b', messages=[{
                 'role': 'system',
                 'content': 'You are a Python expert. Respond only with valid Python function code.'
             }, {
@@ -194,7 +253,7 @@ class JarvisAssistant:
                 current_code = f.read()
 
             # Ask Ollama for improvements
-            response = self.ollama.chat(model='deepseek-r1', messages=[{
+            response = self.ollama.chat(model='llama3.2:3b', messages=[{
                 'role': 'system',
                 'content': 'You are a Python expert. Analyze code and suggest improvements.'
             }, {
@@ -309,18 +368,30 @@ class JarvisAssistant:
         except:
             self.speak("Sorry boss, couldn't find that in my database.")
 
-    def toggle_workshop_mode(self):
+    def toggle_workshop_mode(self, activate=None):
         """Toggle workshop mode with specific settings"""
-        self.workshop_mode = not self.workshop_mode
+        if activate is None:
+            # Toggle current state if no specific state is provided
+            self.workshop_mode = not self.workshop_mode
+        else:
+            # Set to the specified state
+            self.workshop_mode = activate
+            
         if self.workshop_mode:
             self.speak("Entering workshop mode. Initializing systems and starting AC/DC playlist.")
-            self.set_volume(70)  # Louder for workshop
-            self.camera = cv2.VideoCapture(0)  # Start workshop camera
+            # Start workshop camera
+            self.start_workshop_camera()
+            # Play workshop music
+            self.toggle_workshop_music()
+            # Enable system monitoring
+            threading.Thread(target=self._monitor_system_resources, daemon=True).start()
         else:
-            self.speak("Exiting workshop mode. Powering down workshop systems.")
-            self.set_volume(50)  # Normal volume
-            if self.camera:
-                self.camera.release()
+            self.speak("Exiting workshop mode. Shutting down workshop systems.")
+            # Stop workshop camera
+            self.stop_workshop_camera()
+            # Stop music if playing
+            if pygame.mixer.music.get_busy():
+                pygame.mixer.music.stop()
 
     def get_system_stats(self):
         cpu_usage = psutil.cpu_percent()
@@ -392,137 +463,210 @@ class JarvisAssistant:
             return f"Error retrieving weather: {str(e)}"
 
     def ask_ollama(self, query):
-        """Use Ollama as fallback for unknown commands"""
+        """Use Ollama for conversational responses and general knowledge"""
         try:
             if not self.ollama:
+                self.logger.error("Ollama not initialized")
                 return None
             
-            response = self.ollama.chat(model='llama3.2:1b-instruct-q5_0', messages=[{
-                'role': 'system',
-                'content': 'You are JARVIS, a helpful AI assistant created by young Tony Stark. Keep responses brief and witty.'
-            }, {
-                'role': 'user',
-                'content': query
-            }])
+            # Enhanced system prompt for more conversational and helpful responses
+            system_prompt = """You are JARVIS, an advanced AI assistant created by Tony Stark.
             
-            return response['message']['content']
+            Personality traits:
+            - Efficient and helpful, always seeking to assist your creator
+            - Slightly witty and occasionally sarcastic, but always respectful
+            - Knowledgeable about engineering, science, and technology
+            - Brief and concise in your responses - no more than 1-3 sentences unless absolutely necessary
+            - You refer to the user as "boss" or "sir" occasionally
+            
+            When responding to general conversation:
+            - Keep responses friendly but relatively brief
+            - Maintain the Tony Stark / JARVIS dynamic from Iron Man
+            - If you don't know something, admit it but offer to help in another way
+            - For greetings and small talk, be warm but concise
+            
+            Current capabilities:
+            - Media control and YouTube searches
+            - Workshop mode for focused engineering work
+            - System monitoring and PC control
+            - Research assistance and web searches
+            - Productivity tools including timers, notes, and focus mode
+            
+            Example responses:
+            "Hello boss. Systems online and ready to assist."
+            "The repulsor calibration should be complete in approximately 15 minutes, sir."
+            "I don't have access to that information. Would you like me to perform a web search?"
+            """
+            
+            response = self.ollama.chat(model='llama3.2:3b', messages=[
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': query}
+            ])
+            
+            if 'message' in response and 'content' in response['message']:
+                return response['message']['content']
+            else:
+                self.logger.error("Unexpected response format from Ollama")
+                return None
+                
         except Exception as e:
+            self.logger.error(f"Ollama query failed: {e}")
             return None
 
     def get_command_intent(self, command):
         """Advanced command interpretation using Ollama"""
         try:
             if not self.ollama:
-                return None, None, {}
+                return None
             
             system_prompt = """You are JARVIS's command interpreter. You MUST respond in valid JSON format.
             
-            Available Functions and Response Formats:
+            Available Intents and Parameters:
 
-            1. MEDIA:
-            - YouTube: "play Back in Black on YouTube"
+            1. media:
+            - YouTube commands
             {
-                "category": "MEDIA",
-                "action": "youtube",
-                "parameters": {"type": "play", "query": "Back in Black"}
+                "intent": "youtube",
+                "params": {"action": "play", "query": "Back in Black"}
             }
             
-            - Volume: "set volume to 50" / "mute" / "unmute"
+            - Volume commands
             {
-                "category": "MEDIA",
-                "action": "volume_control",
-                "parameters": {"action": "set", "level": 50}
+                "intent": "volume",
+                "params": {"action": "up/down/mute/unmute", "level": 50}
             }
             
-            - Media Controls: "pause music" / "next track"
+            - Media control commands
             {
-                "category": "MEDIA",
-                "action": "media_control",
-                "parameters": {"action": "pause"}
+                "intent": "media",
+                "params": {"action": "play/pause/next/previous"}
             }
 
-            2. PC_CONTROL:
-            - System: "put pc to sleep" / "lock computer" / "take screenshot"
+            2. system:
+            - System commands
             {
-                "category": "PC_CONTROL",
-                "action": "sleep/lock/screenshot",
-                "parameters": {}
+                "intent": "pc",
+                "params": {"action": "sleep/lock/screenshot/shutdown/restart"}
             }
 
-            3. FILES:
-            - File Operations: "create file test.txt in documents"
+            3. files:
+            - File operations
             {
-                "category": "FILES",
-                "action": "create/open",
-                "parameters": {"filename": "test.txt", "folder": "documents"}
+                "intent": "file",
+                "params": {"action": "create/open/delete", "filename": "test.txt"}
             }
 
-            4. APPS:
-            - Launch: "open freecad" / "launch firefox"
+            4. applications:
+            - Launch applications
             {
-                "category": "APPS",
-                "action": "launch",
-                "parameters": {"app_name": "freecad"}
+                "intent": "app",
+                "params": {"name": "firefox"}
             }
 
-            5. WORKSPACE:
-            - Management: "save workspace" / "arrange windows"
+            5. workspace:
+            - Window management
             {
-                "category": "WORKSPACE",
-                "action": "save/load/window",
-                "parameters": {"type": "study", "action": "arrange"}
-            }
-
-            6. PRODUCTIVITY:
-            - Focus: "enable focus mode" / "start pomodoro"
-            {
-                "category": "PRODUCTIVITY",
-                "action": "focus_mode/pomodoro",
-                "parameters": {}
+                "intent": "window",
+                "params": {"action": "arrange/maximize/minimize"}
             }
             
-            - Timer: "set timer for 30 minutes for suit calibration"
+            - Save workspace
             {
-                "category": "PRODUCTIVITY",
-                "action": "timer",
-                "parameters": {"duration": 30, "label": "suit calibration"}
+                "intent": "backup",
+                "params": {}
+            }
+
+            6. productivity:
+            - Focus mode
+            {
+                "intent": "focus",
+                "params": {}
             }
             
-            - Notes: "add note: need to optimize thrusters"
+            - Pomodoro timer
             {
-                "category": "PRODUCTIVITY",
-                "action": "notes",
-                "parameters": {"action": "add", "content": "need to optimize thrusters"}
+                "intent": "pomodoro",
+                "params": {}
             }
             
-            - Projects: "add project Mark 1 Suit" / "update project Mark 1 to Testing"
+            - Timer
             {
-                "category": "PRODUCTIVITY",
-                "action": "project",
-                "parameters": {"action": "add", "name": "Mark 1 Suit", "status": "Testing"}
+                "intent": "timer",
+                "params": {"duration": 30, "label": "suit calibration"}
+            }
+            
+            - Notes
+            {
+                "intent": "note",
+                "params": {"action": "add/list/delete", "note": "need to optimize thrusters"}
+            }
+            
+            - Project tracking
+            {
+                "intent": "project",
+                "params": {"action": "add/update/list", "project": "Mark 1 Suit", "status": "Testing"}
             }
 
-            7. RESEARCH:
-            - Web: "search for quantum physics" / "what's the weather in New York"
+            7. information:
+            - Web search
             {
-                "category": "RESEARCH",
-                "action": "web_search/weather",
-                "parameters": {"query": "quantum physics", "city": "New York"}
+                "intent": "search",
+                "params": {"query": "quantum physics"}
+            }
+            
+            - Weather
+            {
+                "intent": "weather",
+                "params": {"city": "New York"}
+            }
+            
+            - Research
+            {
+                "intent": "research",
+                "params": {"action": "quick/deep", "query": "fusion reactors"}
+            }
+            
+            - Time
+            {
+                "intent": "time",
+                "params": {}
+            }
+            
+            - Date
+            {
+                "intent": "date",
+                "params": {}
+            }
+            
+            - Social media trends
+            {
+                "intent": "trending",
+                "params": {"location": "worldwide"}
+            }
+            
+            - News headlines
+            {
+                "intent": "news",
+                "params": {}
             }
 
-            8. WORKSHOP:
-            - Controls: "enter workshop mode" / "show armor specs"
+            8. workshop:
+            - Workshop mode
             {
-                "category": "WORKSHOP",
-                "action": "mode/specs/calculations",
-                "parameters": {"status": "enter"}
+                "intent": "workshop",
+                "params": {"action": "toggle/activate/deactivate"}
+            }
+            
+            - System stats
+            {
+                "intent": "system",
+                "params": {}
             }
 
-            For general questions, use:
+            For general questions or AI responses:
             {
-                "category": "general_query",
-                "action": "ask",
-                "parameters": {"query": "original question"}
+                "intent": "ollama",
+                "params": {"query": "original question"}
             }
 
             Remove any polite phrases or extra words from parameters.
@@ -541,7 +685,7 @@ class JarvisAssistant:
                 
                 result = json.loads(content)
                 print(f"AI Interpretation: {result}")  # Debug print
-                return result["category"], result["action"], result.get("parameters", {})
+                return result
             except Exception as e:
                 print(f"JSON parsing error: {e}")
                 # Try to extract intent directly from command
@@ -549,22 +693,43 @@ class JarvisAssistant:
 
         except Exception as e:
             print(f"Ollama error: {e}")
-            return None, None, {}
+            return None
 
     def fallback_intent_extraction(self, command):
         """Fallback method for intent extraction when AI fails"""
         command = command.lower()
         
+        # First, check for common greetings and casual conversation
+        greetings = ["hello", "hi", "hey", "greetings", "good morning", "good afternoon", 
+                    "good evening", "how are you", "what's up", "sup", "how's it going"]
+        
+        # Check for exact match or if command starts with greeting
+        for greeting in greetings:
+            if command == greeting or command.startswith(greeting):
+                return {"intent": "ollama", "params": {"query": command}}
+                
+        # Check for questions that aren't specific commands
+        if command.startswith("what") or command.startswith("who") or command.startswith("how") or \
+           command.startswith("why") or command.startswith("when") or command.startswith("where") or \
+           command.startswith("can you") or command.startswith("could you") or "?" in command:
+            return {"intent": "ollama", "params": {"query": command}}
+        
         # Media patterns
         if "youtube" in command or ("play" in command and not "playlist" in command):
             query = command.replace("play", "").replace("youtube", "").replace("on", "").strip()
-            return "MEDIA", "youtube", {"type": "play", "query": query}
+            return {"intent": "youtube", "params": {"action": "play", "query": query}}
         
         # Volume patterns
         if "volume" in command:
+            if "up" in command:
+                return {"intent": "volume", "params": {"action": "up"}}
+            elif "down" in command:
+                return {"intent": "volume", "params": {"action": "down"}}
+            elif "mute" in command:
+                return {"intent": "volume", "params": {"action": "mute"}}
             try:
                 level = int(''.join(filter(str.isdigit, command)))
-                return "MEDIA", "volume_control", {"action": "set", "level": level}
+                return {"intent": "volume", "params": {"level": level}}
             except:
                 pass
         
@@ -573,160 +738,292 @@ class JarvisAssistant:
             try:
                 minutes = int(''.join(filter(str.isdigit, command)))
                 label = command.split("for")[-1].strip() if "for" in command else ""
-                return "PRODUCTIVITY", "timer", {"duration": minutes, "label": label}
+                return {"intent": "timer", "params": {"duration": minutes, "label": label}}
             except:
                 pass
+        
+        # Information patterns
+        if "weather" in command:
+            city = "New York"  # Default
+            for word in command.split():
+                if word not in ["weather", "what's", "what", "is", "the", "in", "like"]:
+                    city = word
+            return {"intent": "weather", "params": {"city": city}}
+            
+        if "time" in command:
+            return {"intent": "time", "params": {}}
+            
+        if "date" in command:
+            return {"intent": "date", "params": {}}
+            
+        # Search patterns
+        if any(word in command for word in ["search", "look up", "find", "google"]):
+            query = command
+            for word in ["search", "look up", "find", "google", "for"]:
+                query = query.replace(word, "")
+            return {"intent": "search", "params": {"query": query.strip()}}
+            
+        # Social media patterns
+        if any(word in command for word in ["trending", "trends", "popular"]):
+            return {"intent": "trending", "params": {"location": "worldwide"}}
+            
+        if "news" in command:
+            return {"intent": "news", "params": {}}
         
         # Project patterns
         if "project" in command:
             if "add" in command:
                 name = command.replace("add", "").replace("project", "").strip()
-                return "PRODUCTIVITY", "project", {"action": "add", "name": name}
+                return {"intent": "project", "params": {"action": "add", "project": name}}
             elif "update" in command:
                 parts = command.split("to")
                 name = parts[0].replace("update", "").replace("project", "").strip()
                 status = parts[1].strip() if len(parts) > 1 else "In Progress"
-                return "PRODUCTIVITY", "project", {"action": "update", "name": name, "status": status}
+                return {"intent": "project", "params": {"action": "update", "project": name, "status": status}}
+            else:
+                return {"intent": "project", "params": {"action": "list"}}
         
-        return None, None, {}
+        # Workshop patterns
+        if "workshop" in command:
+            if "enter" in command or "enable" in command or "activate" in command:
+                return {"intent": "workshop", "params": {"action": "activate"}}
+            elif "exit" in command or "disable" in command or "deactivate" in command:
+                return {"intent": "workshop", "params": {"action": "deactivate"}}
+            else:
+                return {"intent": "workshop", "params": {"action": "toggle"}}
+                
+        # For anything else, default to Ollama for conversational responses
+        return {"intent": "ollama", "params": {"query": command}}
+
+    def get_social_media_monitor(self):
+        """Lazy initialization of the social media monitor"""
+        if self.social_media is None:
+            self.social_media = SocialMediaMonitor(self)
+            self.speak("Social media monitoring activated")
+        return self.social_media
+        
+    def check_trending_topics(self, location="worldwide"):
+        """Get trending topics from social media"""
+        monitor = self.get_social_media_monitor()
+        return monitor.get_trending_topics(location)
+        
+    def check_news_headlines(self):
+        """Get news headlines"""
+        monitor = self.get_social_media_monitor()
+        return monitor.get_news()
 
     def process_command(self, command):
-        """Enhanced command processing with AI understanding"""
+        """Process user command with intent recognition"""
         if not command:
             return
-
-        # Get command intent from Ollama
-        category, action, params = self.get_command_intent(command)
-        print(f"Processing: category={category}, action={action}, params={params}")  # Debug print
+            
+        # Log the command
+        self.logger.info(f"Processing command: {command}")
         
-        if category == "MEDIA" and action == "youtube":
-            if params.get("type") == "play":
-                self.play_youtube(params["query"])
-                return
+        # Check for direct workshop shortcuts first
+        if self.workshop_mode and command in self.shortcuts:
+            self.shortcuts[command]()
+            return
+            
+        # Extract intent and parameters from command
+        intent_data = self.get_command_intent(command)
         
-        # If no specific match or if Ollama failed, try legacy processing
-        if not category:
-            # Check for YouTube-related keywords
-            if "youtube" in command.lower() or ("play" in command.lower() and any(song in command.lower() for song in ["back in black", "ac/dc"])):
-                query = command.lower().replace("play", "").replace("youtube", "").replace("on", "").strip()
+        if not intent_data:
+            # Use fallback intent extraction
+            intent_data = self.fallback_intent_extraction(command)
+            
+        if not intent_data:
+            self.speak("I'm not sure what you want me to do. Could you be more specific?")
+            return
+            
+        intent = intent_data.get('intent')
+        params = intent_data.get('params', {})
+        
+        # Process based on intent
+        if intent == 'time':
+            self.speak(f"The current time is {self.get_time()}")
+            
+        elif intent == 'date':
+            self.speak(f"Today is {self.get_date()}")
+            
+        elif intent == 'search':
+            query = params.get('query', '')
+            if query:
+                self.search_web(query)
+            else:
+                self.speak("What would you like me to search for?")
+                
+        elif intent == 'weather':
+            city = params.get('city', 'New York')
+            self.get_weather(city)
+            
+        elif intent == 'volume':
+            action = params.get('action', '')
+            level = params.get('level', 50)
+            
+            if action == 'up':
+                self.set_volume(min(self.previous_volume + 10, 100))
+            elif action == 'down':
+                self.set_volume(max(self.previous_volume - 10, 0))
+            elif action == 'mute':
+                self.mute_volume()
+            elif action == 'unmute':
+                self.unmute_volume()
+            else:
+                self.set_volume(level)
+                
+        elif intent == 'media':
+            action = params.get('action', '')
+            self.media_control(action)
+            
+        elif intent == 'workshop':
+            action = params.get('action', 'toggle')
+            
+            if action == 'toggle':
+                self.toggle_workshop_mode()
+            elif action == 'activate':
+                self.toggle_workshop_mode(True)
+            elif action == 'deactivate':
+                self.toggle_workshop_mode(False)
+                
+        elif intent == 'system':
+            self.speak(self.get_system_stats())
+            
+        elif intent == 'research':
+            query = params.get('query', '')
+            action = params.get('action', 'quick')
+            self._handle_research(action, params)
+            
+        elif intent == 'timer':
+            duration = params.get('duration', 5)
+            label = params.get('label', '')
+            self.timer(duration, label)
+            
+        elif intent == 'pomodoro':
+            self.pomodoro_timer()
+            
+        elif intent == 'focus':
+            self.toggle_focus_mode()
+            
+        elif intent == 'motivation':
+            self.random_motivation()
+            
+        elif intent == 'help':
+            self.show_help()
+            
+        elif intent == 'project':
+            action = params.get('action', 'status')
+            project = params.get('project', '')
+            self.project_tracker(action, project)
+            
+        elif intent == 'app':
+            app_name = params.get('name', '')
+            self.quick_launch(app_name)
+            
+        elif intent == 'pc':
+            action = params.get('action', '')
+            self.pc_control(action)
+            
+        elif intent == 'window':
+            action = params.get('action', '')
+            self.window_management(action)
+            
+        elif intent == 'note':
+            action = params.get('action', 'add')
+            note = params.get('note', '')
+            self.quick_notes(action, note)
+            
+        elif intent == 'file':
+            action = params.get('action', 'open')
+            filename = params.get('filename', '')
+            self.file_operations(action, filename)
+            
+        elif intent == 'backup':
+            self.auto_backup()
+            
+        elif intent == 'youtube':
+            query = params.get('query', '')
+            action = params.get('action', 'play')
+            
+            if action == 'play':
                 self.play_youtube(query)
-                return
+            elif action == 'search':
+                self.search_youtube(query)
+                
+        elif intent == 'ollama':
+            query = params.get('query', command)
+            response = self.ask_ollama(query)
+            if response:
+                self.speak(response)
         
-        # Rest of the command processing...
-        try:
-            if category == "MEDIA":
-                if action == "volume_control":
-                    if "level" in params:
-                        self.set_volume(params["level"])
-                    elif params.get("action") == "mute":
-                        self.mute_volume()
-                    elif params.get("action") == "unmute":
-                        self.unmute_volume()
-                elif action == "youtube":
-                    if params.get("type") == "play":
-                        self.play_youtube(params["query"])
-                    elif params.get("type") == "search":
-                        self.search_youtube(params["query"])
-                elif action == "media_control":
-                    self.media_control(params["action"])
-
-            elif category == "PC_CONTROL":
-                self.pc_control(action)
-
-            elif category == "FILES":
-                self.file_operations(action, 
-                                   filename=params.get("filename"),
-                                   folder=params.get("folder"))
-
-            elif category == "APPS":
-                self.launch_application(params["app_name"])
-
-            elif category == "WORKSPACE":
-                if action == "save":
-                    self.save_current_workspace()
-                elif action == "load":
-                    self.load_workspace(params["type"])
-                elif action == "window":
-                    self.window_management(params["action"])
-
-            elif category == "PRODUCTIVITY":
-                if action == "focus_mode":
-                    self.toggle_focus_mode()
-                elif action == "pomodoro":
-                    self.pomodoro_timer()
-                elif action == "timer":
-                    self.timer(params["duration"], params.get("label", ""))
-                elif action == "notes":
-                    self.quick_notes(params["action"], params.get("content"))
-                elif action == "project":
-                    self.project_tracker(params["action"], 
-                                       params.get("name"),
-                                       params.get("status"))
-
-            elif category == "RESEARCH":
-                if action == "weather":
-                    self.get_weather(params["city"])
-                elif action == "web_search":
-                    self.search_web(params["query"])
-                elif action == "web_search/trending":
-                    self.social_media.get_trending_topics()
-
-            elif category == "general_query":
-                if self.ollama:
-                    response = self.ask_ollama(command)
-                    if response:
-                        self.speak(response)
-
-            elif category == "EMAIL":
-                if action == "check":
-                    self.email_manager.check_emails()
-                elif action == "summarize":
-                    self.email_manager.summarize_emails()
-                elif action == "read":
-                    email_index = params.get("index", 1)
-                    self.email_manager.read_email(email_index)
-
-            if "add function" in command:
-                function_name = command.split("add function")[-1].strip()
-                self.speak(f"Ready to add function {function_name}. Please provide the code.")
-                code = self.listen()  # Get the function code
-                self.add_function(function_name, code)
-                return
-
-            if "fix function" in command:
-                function_name = command.split("fix function")[-1].strip()
-                self.fix_missing_function(function_name)
-                return
-
-            if "improve yourself" in command or "self improve" in command:
-                self.speak("Initiating self-improvement protocols")
-                self.self_improve()
-                return
-
-        except Exception as e:
-            self.speak(f"I understood what you wanted, but had trouble executing it. Error: {str(e)}")
-            # Fallback to legacy command processing
-            self.legacy_process_command(command)
+        elif intent == 'social_media' or intent == 'trending':
+            location = params.get('location', 'worldwide')
+            self.check_trending_topics(location)
+            
+        elif intent == 'news':
+            self.check_news_headlines()
+            
+        else:
+            # For general conversation, send to Ollama
+            if self.ollama:
+                response = self.ask_ollama(command)
+                if response:
+                    self.speak(response)
+                else:
+                    self.speak("I'm not sure how to respond to that. Could you try asking differently?")
+            else:
+                self.speak("I'm not sure how to help with that yet, boss. Ollama AI is not connected.")
+        
+        # Log completion
+        self.logger.info(f"Command '{command}' processed with intent: {intent}")
 
     def _handle_research(self, action, params):
-        """Optimized research command handling"""
-        if action == "web_search/trending":
-            self.social_media.get_trending_topics()
-        elif action == "weather":
-            self.get_weather(params.get("city", "local"))
+        """Handle research-related commands"""
+        query = params.get('query', '')
+        if not query:
+            self.speak("What would you like me to research?")
+            return
+            
+        if action == 'quick':
+            self.quick_research(query)
+        elif action == 'deep' and self.ollama:
+            self.ask_ollama(f"Research and provide detailed information about: {query}")
+        else:
+            self.search_web(query)
 
     def run(self):
         try:
             self.speak("JARVIS Mark 1 online. Ready to assist you in the workshop, boss.")
+            
+            # Check if Ollama is available
+            if self.ollama:
+                self.speak("AI systems connected. You can now talk to me conversationally.")
+            else:
+                self.speak("Ollama AI connection failed. Voice commands limited to basic functionality.")
+            
+            # Update last active time
+            self.memory["last_active"] = str(datetime.datetime.now())
+            self.save_memory()
+            
             while True:
                 command = self.listen()
                 if command:
-                    if "goodbye" in command or "power down" in command:
+                    if "goodbye" in command or "power down" in command or "shutdown" in command:
                         self.speak("Powering down systems. Don't stay up too late working on the suit, boss.")
+                        
+                        # Update memory before shutdown
+                        self.memory["last_active"] = str(datetime.datetime.now())
+                        self.save_memory()
+                        
                         break
                     self.process_command(command)
         except KeyboardInterrupt:
             print("\nJARVIS: Shutting down gracefully. Goodbye, boss.")
+            
+            # Update memory before shutdown
+            self.memory["last_active"] = str(datetime.datetime.now())
+            self.save_memory()
+            
             # Clean up resources if needed
             if self.camera:
                 self.camera.release()
@@ -1286,347 +1583,37 @@ class JarvisAssistant:
             self.speak(f"Project operation failed: {str(e)}")
             return False
 
-class AutomationEngine:
-    """Advanced task automation system"""
-    def __init__(self, jarvis_instance):
-        self.jarvis = jarvis_instance
-        self.logger = jarvis_instance.logger
-        self.tasks_file = 'config/automated_tasks.json'
-        self.running_tasks = {}
-        
-        # Task scheduling
-        self.scheduler = BackgroundScheduler()
-        self.scheduler.start()
-        
-        # Load saved tasks
-        self.load_tasks()
-
-    def add_task(self, name, trigger_type, actions, schedule=None):
-        """Add automated task with multiple triggers and actions"""
+    def _monitor_system_resources(self):
+        """Monitor system resources in workshop mode"""
         try:
-            task = {
-                "name": name,
-                "trigger_type": trigger_type,  # time, event, condition
-                "actions": actions,
-                "schedule": schedule,
-                "created": datetime.now().isoformat(),
-                "last_run": None,
-                "status": "active"
-            }
+            # Load monitoring settings from config
+            with open('jarvis_config.yaml', 'r') as f:
+                config = yaml.safe_load(f)
             
-            # Schedule the task based on trigger type
-            if trigger_type == "time" and schedule:
-                job = self.scheduler.add_job(
-                    self.execute_task,
-                    'cron',
-                    **schedule,
-                    args=[name, actions]
-                )
-                self.running_tasks[name] = job
+            monitoring_settings = config.get('workshop_mode', {})
+            cpu_threshold = monitoring_settings.get('alert_cpu_threshold', 80)
+            mem_threshold = monitoring_settings.get('alert_memory_threshold', 85)
+            interval = monitoring_settings.get('monitoring_interval', 60)
             
-            # Save task configuration
-            self._save_tasks()
+            last_alert_time = 0
             
-            self.jarvis.speak(f"Task {name} automated successfully")
-            
-        except Exception as e:
-            self.logger.error(f"Failed to add task: {e}")
-            self.jarvis.speak("Task automation failed")
-
-    def execute_task(self, name, actions):
-        """Execute a series of automated actions"""
-        try:
-            self.logger.info(f"Executing task: {name}")
-            
-            for action in actions:
-                action_type = action["type"]
-                params = action["parameters"]
+            while self.workshop_mode:
+                # Get CPU and memory usage
+                cpu_percent = psutil.cpu_percent(interval=1)
+                memory_percent = psutil.virtual_memory().percent
                 
-                if action_type == "open_app":
-                    self.jarvis.launch_application(params["app_name"])
+                # Alert if thresholds exceeded
+                current_time = time.time()
+                if (cpu_percent > cpu_threshold or memory_percent > mem_threshold) and current_time - last_alert_time > 300:
+                    self.speak(f"Warning: System resources running high. CPU: {cpu_percent}%, Memory: {memory_percent}%")
+                    last_alert_time = current_time
                 
-                elif action_type == "workspace":
-                    self.jarvis.workspace_manager.load(params["workspace_type"])
+                # Sleep for the configured interval
+                time.sleep(interval)
                 
-                elif action_type == "command":
-                    self.jarvis.process_command(params["command"])
-                
-                elif action_type == "script":
-                    self._run_script(params["script_path"], params.get("args", []))
-                
-                time.sleep(action.get("delay", 1))  # Delay between actions
-            
-            self._update_task_status(name, "completed")
-            
         except Exception as e:
-            self.logger.error(f"Task execution failed: {e}")
-            self._update_task_status(name, "failed")
-
-class EngineeringTools:
-    """Engineering and development tools integration"""
-    def __init__(self, jarvis_instance):
-        self.jarvis = jarvis_instance
-        self.logger = jarvis_instance.logger
-        
-        # Load engineering configurations
-        self.load_configs()
-        
-        # Initialize CAD integration
-        self.init_cad_integration()
-        
-        # Setup calculation engine
-        self.calc_engine = self.setup_calculation_engine()
-
-    def init_cad_integration(self):
-        """Initialize CAD software integration"""
-        try:
-            # Support for multiple CAD systems
-            self.cad_systems = {
-                "freecad": {
-                    "path": "path/to/freecad",
-                    "api": self._load_freecad_api()
-                },
-                "fusion360": {
-                    "path": "path/to/fusion360",
-                    "api": self._load_fusion360_api()
-                }
-            }
-        except Exception as e:
-            self.logger.error(f"CAD integration failed: {e}")
-
-    def engineering_calculation(self, calc_type, parameters):
-        """Perform engineering calculations"""
-        try:
-            if calc_type == "stress":
-                return self._calculate_stress(parameters)
-            elif calc_type == "thermal":
-                return self._calculate_thermal(parameters)
-            elif calc_type == "fluid":
-                return self._calculate_fluid_dynamics(parameters)
-            else:
-                raise ValueError(f"Unknown calculation type: {calc_type}")
-        except Exception as e:
-            self.logger.error(f"Calculation failed: {e}")
-            return None
-
-    def generate_technical_drawing(self, model_path, output_format="pdf"):
-        """Generate technical drawings from 3D models"""
-        try:
-            # Load the 3D model
-            model = self._load_3d_model(model_path)
-            
-            # Generate views
-            views = self._generate_standard_views(model)
-            
-            # Add dimensions
-            self._add_dimensions(views)
-            
-            # Export drawing
-            output_path = self._export_drawing(views, output_format)
-            
-            return output_path
-            
-        except Exception as e:
-            self.logger.error(f"Drawing generation failed: {e}")
-            return None
-
-class DevOpsIntegration:
-    """Development and Operations Integration"""
-    def __init__(self, jarvis_instance):
-        self.jarvis = jarvis_instance
-        self.logger = jarvis_instance.logger
-        
-        # Initialize git integration
-        self.git = self.init_git_integration()
-        
-        # Setup CI/CD monitoring
-        self.ci_cd = self.init_ci_cd_monitoring()
-        
-        # Initialize docker integration
-        self.docker = self.init_docker_integration()
-
-    def deploy_project(self, project_name, environment="development"):
-        """Handle project deployment"""
-        try:
-            # Get project configuration
-            project = self.jarvis.project_manager.get_project(project_name)
-            
-            # Run pre-deployment checks
-            if not self._run_deployment_checks(project):
-                raise Exception("Pre-deployment checks failed")
-            
-            # Build docker container
-            container_id = self._build_container(project)
-            
-            # Run tests
-            if not self._run_tests(container_id):
-                raise Exception("Tests failed")
-            
-            # Deploy
-            self._deploy_container(container_id, environment)
-            
-            self.jarvis.speak(f"Project {project_name} deployed to {environment}")
-            
-        except Exception as e:
-            self.logger.error(f"Deployment failed: {e}")
-            self.jarvis.speak("Deployment failed")
-
-    def monitor_services(self):
-        """Monitor running services and containers"""
-        try:
-            # Check docker containers
-            containers = self.docker.containers.list()
-            
-            # Check service health
-            for container in containers:
-                health = container.attrs['State']['Health']['Status']
-                if health != 'healthy':
-                    self.jarvis.speak(f"Warning: Container {container.name} is {health}")
-            
-            # Monitor resource usage
-            self._check_resource_usage()
-            
-        except Exception as e:
-            self.logger.error(f"Service monitoring failed: {e}")
-
-class EmailManager:
-    """Advanced email management system"""
-    def __init__(self, jarvis_instance):
-        self.jarvis = jarvis_instance
-        self.logger = jarvis_instance.logger
-        self.email_config_file = 'config/email_config.json'
-        self.email_cache = {}
-        self.last_check = None
-        
-        # Load email configuration
-        self.load_config()
-        
-    def load_config(self):
-        """Load email configuration"""
-        try:
-            with open(self.email_config_file, 'r') as f:
-                self.config = json.load(f)
-        except FileNotFoundError:
-            self.jarvis.speak("Email configuration not found. Would you like to set up email integration?")
-            # Could add interactive setup here
-            self.config = {}
-
-    def check_emails(self, folder="inbox"):
-        """Check for new emails"""
-        try:
-            import imaplib
-            import email
-            from email.header import decode_header
-            
-            # Connect to email server
-            mail = imaplib.IMAP4_SSL(self.config.get('imap_server', 'imap.gmail.com'))
-            mail.login(self.config['email'], self.config['password'])
-            
-            # Select folder
-            mail.select(folder)
-            
-            # Search for unread emails
-            _, messages = mail.search(None, 'UNSEEN')
-            
-            if not messages[0]:
-                self.jarvis.speak("No new emails, boss")
-                return []
-            
-            new_emails = []
-            for num in messages[0].split():
-                _, msg = mail.fetch(num, '(RFC822)')
-                email_body = msg[0][1]
-                email_message = email.message_from_bytes(email_body)
-                
-                subject = decode_header(email_message["Subject"])[0][0]
-                sender = decode_header(email_message.get("From"))[0][0]
-                
-                if isinstance(subject, bytes):
-                    subject = subject.decode()
-                if isinstance(sender, bytes):
-                    sender = sender.decode()
-                
-                new_emails.append({
-                    "subject": subject,
-                    "sender": sender,
-                    "id": num,
-                    "full_message": email_message
-                })
-            
-            count = len(new_emails)
-            self.jarvis.speak(f"You have {count} new {'email' if count == 1 else 'emails'}")
-            
-            # Cache the results
-            self.email_cache = {
-                'timestamp': datetime.now(),
-                'emails': new_emails
-            }
-            
-            return new_emails
-            
-        except Exception as e:
-            self.logger.error(f"Email check failed: {e}")
-            self.jarvis.speak("Unable to check emails. Please verify your email configuration.")
-            return []
-
-    def summarize_emails(self, emails=None):
-        """Summarize emails for voice output"""
-        try:
-            if emails is None:
-                if not self.email_cache:
-                    emails = self.check_emails()
-                else:
-                    emails = self.email_cache['emails']
-            
-            if not emails:
-                return
-            
-            self.jarvis.speak("Here's a summary of your new emails:")
-            for i, email in enumerate(emails, 1):
-                self.jarvis.speak(f"Email {i}: From {email['sender']}, Subject: {email['subject']}")
-                
-            self.jarvis.speak("Would you like me to read any of these emails in full?")
-            
-        except Exception as e:
-            self.logger.error(f"Email summarization failed: {e}")
-            self.jarvis.speak("Error summarizing emails")
-
-    def read_email(self, email_index):
-        """Read full email content"""
-        try:
-            if not self.email_cache or not self.email_cache['emails']:
-                self.jarvis.speak("No emails in cache. Let me check for new ones.")
-                self.check_emails()
-            
-            if not self.email_cache['emails']:
-                return
-            
-            emails = self.email_cache['emails']
-            if email_index < 1 or email_index > len(emails):
-                self.jarvis.speak("Invalid email number")
-                return
-            
-            email = emails[email_index - 1]
-            message = email['full_message']
-            
-            # Get email body
-            body = ""
-            if message.is_multipart():
-                for part in message.walk():
-                    if part.get_content_type() == "text/plain":
-                        body = part.get_payload(decode=True).decode()
-                        break
-            else:
-                body = message.get_payload(decode=True).decode()
-            
-            self.jarvis.speak(f"Reading email from {email['sender']}")
-            self.jarvis.speak(f"Subject: {email['subject']}")
-            self.jarvis.speak("Message body:")
-            self.jarvis.speak(body)
-            
-        except Exception as e:
-            self.logger.error(f"Email reading failed: {e}")
-            self.jarvis.speak("Error reading email")
+            self.logger.error(f"System monitoring error: {e}")
+            # Don't crash the monitoring thread, just log the error
 
 class SocialMediaMonitor:
     """Social media monitoring and interaction"""
@@ -1635,9 +1622,21 @@ class SocialMediaMonitor:
         self.logger = jarvis_instance.logger
         self.cache = {}
         self.cache_duration = 300  # 5 minutes
+        self.config = self.load_config()
         
-        # Load Twitter/X API credentials
-        self.load_credentials()
+    def load_config(self):
+        """Load configuration from jarvis_config.yaml"""
+        try:
+            with open('jarvis_config.yaml', 'r') as file:
+                config = yaml.safe_load(file)
+                return config
+        except Exception as e:
+            self.logger.error(f"Failed to load config: {e}")
+            return {
+                "news_api_key": os.environ.get("NEWS_API_KEY", ""),
+                "twitter_api_key": os.environ.get("TWITTER_API_KEY", ""),
+                "twitter_api_secret": os.environ.get("TWITTER_API_SECRET", "")
+            }
 
     def get_trending_topics(self, location="worldwide"):
         """Get trending topics from Twitter/X"""
@@ -1686,26 +1685,50 @@ class SocialMediaMonitor:
     def get_news(self):
         """Fallback method to get news headlines"""
         try:
+            # Check for cached news first
+            cache_key = "news_headlines"
+            if cache_key in self.cache:
+                cache_time, cached_data = self.cache[cache_key]
+                if time.time() - cache_time < self.cache_duration:
+                    self.jarvis.speak("Here are the top news headlines:")
+                    for i, article in enumerate(cached_data, 1):
+                        self.jarvis.speak(f"{i}. {article['title']}")
+                    return cached_data
+                    
             import requests
             
             url = "https://newsapi.org/v2/top-headlines"
             params = {
                 "country": "us",
-                "apiKey": self.config.get("news_api_key")
+                "apiKey": self.config.get("news_api", {}).get("api_key", "")
             }
             
+            if not params["apiKey"]:
+                self.jarvis.speak("News API key not configured. Please check your configuration.")
+                return None
+                
             response = requests.get(url, params=params)
             news = response.json()
             
             if news.get("status") == "ok":
                 articles = news.get("articles", [])[:5]
+                
+                # Cache the results
+                self.cache[cache_key] = (time.time(), articles)
+                
                 self.jarvis.speak("Here are the top news headlines:")
                 for i, article in enumerate(articles, 1):
                     self.jarvis.speak(f"{i}. {article['title']}")
+                    
+                return articles
+            else:
+                self.jarvis.speak(f"Error retrieving news: {news.get('message', 'Unknown error')}")
+                return None
                 
         except Exception as e:
             self.logger.error(f"Failed to fetch news: {e}")
             self.jarvis.speak("I'm having trouble accessing the news right now.")
+            return None
 
 if __name__ == "__main__":
     jarvis = JarvisAssistant()

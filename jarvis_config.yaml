@@ -14,3 +14,14 @@ workshop_mode:
   alert_memory_threshold: 85
   auto_monitor: true
   monitoring_interval: 60
+social_media:
+  trending_cache_duration: 300
+  default_location: worldwide
+news_api:
+  api_key: ""  # Add your API key here
+  default_country: us
+  headlines_count: 5
+memory:
+  auto_save: true
+  max_conversations: 100
+  conversation_expiry_days: 30
