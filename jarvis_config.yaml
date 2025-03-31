@@ -1,0 +1,16 @@
+sound_effects:
+  command_received: sounds/command.wav
+  shutdown: sounds/shutdown.wav
+  startup: sounds/startup.wav
+voice_rate: 150
+voice_volume: 0.9
+web_search:
+  default_engine: google
+  search_urls:
+    google: https://www.google.com/search?q={}
+    technical: https://engineering.stackexchange.com/search?q={}
+workshop_mode:
+  alert_cpu_threshold: 80
+  alert_memory_threshold: 85
+  auto_monitor: true
+  monitoring_interval: 60
