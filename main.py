@@ -1,4 +1,3 @@
-import sys
 import ollama
 import speech_recognition as sr
 import pyttsx3
@@ -26,746 +25,6 @@ import time
 from apscheduler.schedulers.background import BackgroundScheduler
 import shutil
 from bs4 import BeautifulSoup
-import glob
-
-class JarvisAssistant:
-    """Main JARVIS Assistant class integrating all subsystems"""
-    def __init__(self):
-        # Initialize logger first for error tracking
-        self.logger = JarvisLogger()
-        
-        # Initialize core systems
-        self.version = "Mark 1.5"
-        self.arc_reactor_status = "Online"
-        
-        # Initialize text-to-speech and speech recognition
-        self.engine = pyttsx3.init()
-        self.recognizer = sr.Recognizer()
-        
-        # Initialize Ollama for AI processing
-        try:
-            self.ollama = ollama.Client()
-            self.logger.info("Ollama AI system initialized")
-        except Exception as e:
-            self.logger.error(f"Ollama initialization failed: {e}")
-            self.speak("AI processing systems offline")
-        
-        # Initialize audio control
-        try:
-            devices = AudioUtilities.GetSpeakers()
-            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-            self.volume = cast(interface, POINTER(IAudioEndpointVolume))
-            self.is_muted = False
-            self.previous_volume = 50  # Default volume level
-        except Exception as e:
-            self.logger.error(f"Audio control initialization failed: {e}")
-        
-        # Initialize pygame for sound effects
-        try:
-            pygame.mixer.init()
-        except Exception as e:
-            self.logger.error(f"Pygame initialization failed: {e}")
-        
-        # Initialize core subsystems
-        self.power_management = self._init_power_management()
-        self.security = self._init_security_system()
-        self.workshop = self._init_workshop_interface()
-        self.neural_interface = self._init_neural_interface()
-        
-        # Initialize suit interface
-        self.suit_interface = SuitInterface()
-        
-        # Initialize memory system
-        self.memory = JarvisMemory(self)
-        
-        # Initialize workshop mode
-        self.workshop_mode = False
-        
-        # Start monitoring systems
-        self._start_monitoring_systems()
-        
-        # Initialize scheduler for automated tasks
-        self.scheduler = BackgroundScheduler()
-        self.scheduler.start()
-        
-        # Schedule regular maintenance tasks
-        self._schedule_maintenance()
-
-    def speak(self, text):
-        """Speak text using text-to-speech"""
-        try:
-            self.engine.say(text)
-            self.engine.runAndWait()
-        except Exception as e:
-            self.logger.error(f"Speech error: {e}")
-            print(f"Speech output: {text}")
-
-    def listen(self):
-        """Listen for voice commands"""
-        try:
-            with sr.Microphone() as source:
-                self.recognizer.adjust_for_ambient_noise(source)
-                audio = self.recognizer.listen(source)
-                command = self.recognizer.recognize_google(audio).lower()
-                return command
-        except sr.UnknownValueError:
-            self.speak("I didn't catch that. Could you repeat?")
-            return None
-        except sr.RequestError:
-            self.speak("Speech recognition service is offline")
-            return None
-        except Exception as e:
-            self.logger.error(f"Listening error: {e}")
-            return None
-
-    def run(self):
-        """Main assistant loop"""
-        while True:
-            try:
-                command = self.listen()
-                if command:
-                    self.process_command(command)
-            except KeyboardInterrupt:
-                self.speak("Shutting down JARVIS systems")
-                break
-            except Exception as e:
-                self.logger.error(f"Runtime error: {e}")
-                self.speak("System error detected. Attempting recovery.")
-
-    def process_command(self, command):
-        """Process voice commands with AI understanding"""
-        try:
-            # Use Ollama for intent recognition
-            response = self.ollama.chat(model='deepseek-r1', messages=[{
-                'role': 'system',
-                'content': 'You are JARVIS, processing user commands.'
-            }, {
-                'role': 'user',
-                'content': command
-            }])
-            
-            if response and 'message' in response:
-                intent = self._extract_intent(response['message']['content'])
-                self._execute_intent(intent, command)
-            else:
-                # Fallback to basic command processing
-                self._process_basic_command(command)
-                
-        except Exception as e:
-            self.logger.error(f"Command processing error: {e}")
-            # Fallback to basic intent extraction
-            intent, category, params = self.fallback_intent_extraction(command)
-            if intent and category:
-                self._execute_intent({'intent': intent, 'category': category, 'params': params})
-            else:
-                self.speak("I'm having trouble processing that command")
-
-    def _extract_intent(self, ai_response):
-        """Extract intent from AI response"""
-        try:
-            # Basic intent extraction
-            if "play" in ai_response.lower():
-                return {"intent": "MEDIA", "category": "youtube", "params": {"query": ai_response}}
-            elif "volume" in ai_response.lower():
-                return {"intent": "MEDIA", "category": "volume_control"}
-            elif "timer" in ai_response.lower():
-                return {"intent": "PRODUCTIVITY", "category": "timer"}
-            # Add more intent patterns as needed
-            return {"intent": "UNKNOWN", "category": None}
-        except Exception as e:
-            self.logger.error(f"Intent extraction error: {e}")
-            return {"intent": "ERROR", "category": None}
-
-    def _execute_intent(self, intent, original_command=""):
-        """Execute recognized intent"""
-        try:
-            if intent["intent"] == "MEDIA":
-                if intent["category"] == "youtube":
-                    self.play_youtube(intent["params"]["query"])
-                elif intent["category"] == "volume_control":
-                    self.set_volume(intent["params"].get("level", 50))
-                    
-            elif intent["intent"] == "PRODUCTIVITY":
-                if intent["category"] == "timer":
-                    duration = intent["params"].get("duration", 5)
-                    self.timer(duration, intent["params"].get("label", ""))
-                    
-            elif intent["intent"] == "SYSTEM":
-                if intent["category"] == "shutdown":
-                    self.speak("Initiating shutdown sequence")
-                    sys.exit(0)
-                    
-            else:
-                self.speak("I'm not sure how to handle that command")
-                
-        except Exception as e:
-            self.logger.error(f"Intent execution error: {e}")
-            self.speak("Error executing command")
-
-    def _process_basic_command(self, command):
-        """Process basic commands without AI"""
-        command = command.lower()
-        
-        if "youtube" in command or "play" in command:
-            self.play_youtube(command)
-        elif "volume" in command:
-            try:
-                level = int(''.join(filter(str.isdigit, command)))
-                self.set_volume(level)
-            except:
-                self.speak("Could not understand volume level")
-        elif "timer" in command:
-            try:
-                minutes = int(''.join(filter(str.isdigit, command)))
-                self.timer(minutes)
-            except:
-                self.speak("Could not understand timer duration")
-        else:
-            self.speak("Command not recognized")
-
-    def _schedule_maintenance(self):
-        """Schedule regular maintenance tasks"""
-        try:
-            # Schedule memory backup every 6 hours
-            self.scheduler.add_job(
-                self.memory.save_memories,
-                'interval',
-                hours=6,
-                id='memory_backup'
-            )
-            
-            # Schedule system checks every hour
-            self.scheduler.add_job(
-                self._run_system_checks,
-                'interval',
-                hours=1,
-                id='system_checks'
-            )
-            
-        except Exception as e:
-            self.logger.error(f"Maintenance scheduling error: {e}")
-
-    def _run_system_checks(self):
-        """Run periodic system checks"""
-        try:
-            # Check CPU usage
-            cpu_percent = psutil.cpu_percent()
-            if cpu_percent > 90:
-                self.logger.warning(f"High CPU usage: {cpu_percent}%")
-            
-            # Check memory usage
-            memory = psutil.virtual_memory()
-            if memory.percent > 90:
-                self.logger.warning(f"High memory usage: {memory.percent}%")
-            
-            # Check disk space
-            disk = psutil.disk_usage('/')
-            if disk.percent > 90:
-                self.logger.warning(f"Low disk space: {disk.percent}% used")
-            
-        except Exception as e:
-            self.logger.error(f"System check error: {e}")
-
-    def toggle_workshop_mode(self):
-        """Toggle workshop mode"""
-        try:
-            self.workshop_mode = not self.workshop_mode
-            if self.workshop_mode:
-                if self.workshop_mode_features():
-                    self.speak("Workshop mode activated. All systems online.")
-                else:
-                    self.workshop_mode = False
-                    self.speak("Workshop mode activation failed.")
-            else:
-                self.speak("Workshop mode deactivated.")
-        except Exception as e:
-            self.logger.error(f"Workshop mode toggle error: {e}")
-            self.speak("Error toggling workshop mode")
-
-    def _init_power_management(self):
-        """Initialize power management for arc reactor simulation"""
-        return {
-            "current_output": 100,  # Current power output percentage
-            "efficiency": 97.3,     # Arc reactor efficiency
-            "temperature": 62.4,    # Core temperature in Celsius
-            "estimated_life": "8760h",  # Estimated reactor life in hours
-            "power_distribution": {
-                "main_systems": 45,
-                "life_support": 15,
-                "neural_interface": 10,
-                "security": 20,
-                "reserve": 10
-            },
-            "backup_power": {
-                "status": "STANDBY",
-                "capacity": 100,
-                "type": "Secondary Arc Reactor"
-            }
-        }
-    
-    def _init_security_system(self):
-        """Initialize security protocols"""
-        return {
-            "perimeter_sensors": True,
-            "motion_detection": True,
-            "facial_recognition": True,
-            "threat_analysis": True,
-            "quantum_encryption": {
-                "status": "ACTIVE",
-                "key_rotation": "AUTO",
-                "encryption_level": "QUANTUM_256"
-            },
-            "defense_systems": {
-                "automated_turrets": "STANDBY",
-                "energy_shields": "STANDBY",
-                "emergency_lockdown": "READY"
-            }
-        }
-        
-    def _init_workshop_interface(self):
-        """Initialize workshop management system"""
-        return {
-            "3d_printer_status": "Ready",
-            "fabrication_units": "Online",
-            "robotic_assistants": {
-                "DUM-E": {"status": "Online", "task": "Fire Safety"},
-                "U": {"status": "Online", "task": "Tool Management"},
-                "BUTTERFINGERS": {"status": "Online", "task": "Assembly"}
-            },
-            "inventory_system": {
-                "status": "Active",
-                "low_stock_alerts": True,
-                "auto_reorder": True
-            },
-            "environmental_controls": {
-                "temperature": 20.5,
-                "humidity": 45,
-                "air_filtration": "Active",
-                "ventilation": "Auto"
-            }
-        }
-
-    def _init_neural_interface(self):
-        """Initialize neural interface for suit control"""
-        return {
-            "status": "STANDBY",
-            "connection_type": "QUANTUM_NEURAL",
-            "response_time": "0.001ms",
-            "thought_prediction": True,
-            "neural_calibration": 100,
-            "emergency_override": "READY"
-        }
-
-    def set_volume(self, level):
-        """Set system volume level"""
-        try:
-            level = max(0, min(100, level))  # Ensure level is between 0 and 100
-            self.volume.SetMasterVolumeLevelScalar(level / 100, None)
-            self.previous_volume = level
-            self.speak(f"Volume set to {level} percent")
-        except Exception as e:
-            self.logger.error(f"Volume control error: {e}")
-            self.speak("Volume control malfunction")
-
-    def _start_monitoring_systems(self):
-        """Start all monitoring systems in separate threads"""
-        try:
-            monitoring_threads = [
-                threading.Thread(target=self._monitor_arc_reactor, daemon=True),
-                threading.Thread(target=self._monitor_security, daemon=True),
-                threading.Thread(target=self._monitor_workshop, daemon=True),
-                threading.Thread(target=self._monitor_neural_interface, daemon=True)
-            ]
-            for thread in monitoring_threads:
-                thread.start()
-        except Exception as e:
-            self.logger.error(f"Failed to start monitoring systems: {e}")
-
-    def _monitor_arc_reactor(self):
-        """Monitor arc reactor status and performance"""
-        while True:
-            try:
-                # Simulate real-time monitoring
-                current_temp = self.power_management["temperature"]
-                current_output = self.power_management["current_output"]
-                
-                # Check for critical conditions
-                if current_temp > 80:
-                    self._trigger_emergency_protocol("arc_reactor_overheat")
-                if current_output < 50:
-                    self._trigger_emergency_protocol("arc_reactor_low_power")
-                
-                # Update efficiency based on temperature
-                self.power_management["efficiency"] = 100 - (current_temp - 60) * 0.5
-                
-                time.sleep(1)  # Check every second
-            except Exception as e:
-                self.logger.error(f"Arc reactor monitoring error: {e}")
-                time.sleep(5)  # Wait before retrying
-
-    def _monitor_security(self):
-        """Monitor security systems and threats"""
-        while True:
-            try:
-                # Simulate security monitoring
-                if self.security["threat_analysis"]:
-                    threat_level = self._analyze_threats()
-                    if threat_level > 7:
-                        self._trigger_emergency_protocol("security_breach")
-                
-                # Rotate encryption keys
-                if self.security["quantum_encryption"]["key_rotation"] == "AUTO":
-                    self._rotate_encryption_keys()
-                
-                time.sleep(2)  # Check every 2 seconds
-            except Exception as e:
-                self.logger.error(f"Security monitoring error: {e}")
-                time.sleep(5)
-
-    def _monitor_workshop(self):
-        """Monitor workshop conditions and equipment"""
-        while True:
-            try:
-                # Monitor environmental conditions
-                env = self.workshop["environmental_controls"]
-                if env["temperature"] > 30 or env["humidity"] > 70:
-                    self._adjust_environmental_controls()
-                
-                # Check robotic assistants
-                for assistant, data in self.workshop["robotic_assistants"].items():
-                    if data["status"] == "Error":
-                        self.logger.warning(f"{assistant} needs attention")
-                
-                time.sleep(5)  # Check every 5 seconds
-            except Exception as e:
-                self.logger.error(f"Workshop monitoring error: {e}")
-                time.sleep(10)
-
-    def _monitor_neural_interface(self):
-        """Monitor neural interface performance"""
-        while True:
-            try:
-                if self.neural_interface["status"] == "ACTIVE":
-                    # Monitor neural response time
-                    if float(self.neural_interface["response_time"].replace("ms", "")) > 0.1:
-                        self._recalibrate_neural_interface()
-                    
-                    # Update thought prediction model
-                    if self.neural_interface["thought_prediction"]:
-                        self._update_thought_prediction()
-                
-                time.sleep(0.1)  # Check every 100ms for real-time response
-            except Exception as e:
-                self.logger.error(f"Neural interface monitoring error: {e}")
-                time.sleep(1)
-
-    def _trigger_emergency_protocol(self, protocol_name):
-        """Handle emergency protocols"""
-        try:
-            if protocol_name == "arc_reactor_overheat":
-                self.power_management["power_distribution"]["main_systems"] -= 20
-                self.power_management["power_distribution"]["cooling"] = 20
-            elif protocol_name == "security_breach":
-                self.security["defense_systems"]["energy_shields"] = "ACTIVE"
-                self.workshop["workshop_lockdown"] = True
-            elif protocol_name == "neural_interface_failure":
-                self.neural_interface["status"] = "EMERGENCY_SHUTDOWN"
-                self.neural_interface["emergency_override"] = "ACTIVE"
-            
-            self.logger.warning(f"Emergency protocol triggered: {protocol_name}")
-            self.speak(f"Emergency protocol {protocol_name} activated")
-        except Exception as e:
-            self.logger.error(f"Failed to trigger emergency protocol: {e}")
-
-    def _analyze_threats(self):
-        """Analyze potential security threats"""
-        # Placeholder for threat analysis logic
-        return random.randint(0, 10)  # Simulate threat level
-
-    def _rotate_encryption_keys(self):
-        """Rotate quantum encryption keys"""
-        try:
-            # Simulate quantum key rotation
-            self.security["quantum_encryption"]["last_rotation"] = datetime.datetime.now()
-        except Exception as e:
-            self.logger.error(f"Failed to rotate encryption keys: {e}")
-
-    def _adjust_environmental_controls(self):
-        """Adjust workshop environmental controls"""
-        try:
-            current_temp = self.workshop["environmental_controls"]["temperature"]
-            if current_temp > 25:
-                self.workshop["environmental_controls"]["ventilation"] = "Maximum"
-            else:
-                self.workshop["environmental_controls"]["ventilation"] = "Auto"
-        except Exception as e:
-            self.logger.error(f"Failed to adjust environmental controls: {e}")
-
-    def _recalibrate_neural_interface(self):
-        """Recalibrate neural interface"""
-        try:
-            self.neural_interface["neural_calibration"] = 100
-            self.neural_interface["response_time"] = "0.001ms"
-        except Exception as e:
-            self.logger.error(f"Failed to recalibrate neural interface: {e}")
-
-    def _update_thought_prediction(self):
-        """Update thought prediction model"""
-        try:
-            # Placeholder for thought prediction model update
-            pass
-        except Exception as e:
-            self.logger.error(f"Failed to update thought prediction model: {e}")
-
-class JarvisCore:
-    """Core JARVIS system with enhanced capabilities"""
-    def __init__(self):
-        self.version = "Mark 1.5"
-        self.arc_reactor_status = "Online"
-        self.security_protocols = {
-            "intruder_detection": True,
-            "workshop_lockdown": False,
-            "suit_protocols": ["House Party Protocol", "Clean Slate Protocol"],
-            "biometric_auth": True,
-            "quantum_encryption": True,
-            "emergency_protocols": {
-                "arc_reactor_failure": "ACTIVE",
-                "suit_breach": "STANDBY",
-                "workshop_breach": "STANDBY"
-            }
-        }
-        
-        # Initialize advanced subsystems
-        self.power_management = self._init_power_management()
-        self.security = self._init_security_system()
-        self.workshop = self._init_workshop_interface()
-        self.neural_interface = self._init_neural_interface()
-        
-        # Start monitoring threads
-        self._start_monitoring_systems()
-        
-    def _init_power_management(self):
-        """Initialize advanced power management for arc reactor simulation"""
-        return {
-            "current_output": 100,  # Current power output percentage
-            "efficiency": 97.3,     # Arc reactor efficiency
-            "temperature": 62.4,    # Core temperature in Celsius
-            "estimated_life": "8760h",  # Estimated reactor life in hours
-            "power_distribution": {
-                "main_systems": 45,
-                "life_support": 15,
-                "neural_interface": 10,
-                "security": 20,
-                "reserve": 10
-            },
-            "backup_power": {
-                "status": "STANDBY",
-                "capacity": 100,
-                "type": "Secondary Arc Reactor"
-            }
-        }
-    
-    def _init_security_system(self):
-        """Initialize advanced security protocols"""
-        return {
-            "perimeter_sensors": True,
-            "motion_detection": True,
-            "facial_recognition": True,
-            "threat_analysis": True,
-            "quantum_encryption": {
-                "status": "ACTIVE",
-                "key_rotation": "AUTO",
-                "encryption_level": "QUANTUM_256"
-            },
-            "defense_systems": {
-                "automated_turrets": "STANDBY",
-                "energy_shields": "STANDBY",
-                "emergency_lockdown": "READY"
-            }
-        }
-        
-    def _init_workshop_interface(self):
-        """Initialize advanced workshop management system"""
-        return {
-            "3d_printer_status": "Ready",
-            "fabrication_units": "Online",
-            "robotic_assistants": {
-                "DUM-E": {"status": "Online", "task": "Fire Safety"},
-                "U": {"status": "Online", "task": "Tool Management"},
-                "BUTTERFINGERS": {"status": "Online", "task": "Assembly"}
-            },
-            "inventory_system": {
-                "status": "Active",
-                "low_stock_alerts": True,
-                "auto_reorder": True
-            },
-            "environmental_controls": {
-                "temperature": 20.5,
-                "humidity": 45,
-                "air_filtration": "Active",
-                "ventilation": "Auto"
-            }
-        }
-
-    def _init_neural_interface(self):
-        """Initialize neural interface for suit control"""
-        return {
-            "status": "STANDBY",
-            "connection_type": "QUANTUM_NEURAL",
-            "response_time": "0.001ms",
-            "thought_prediction": True,
-            "neural_calibration": 100,
-            "emergency_override": "READY"
-        }
-
-    def _start_monitoring_systems(self):
-        """Start all monitoring systems in separate threads"""
-        try:
-            monitoring_threads = [
-                threading.Thread(target=self._monitor_arc_reactor, daemon=True),
-                threading.Thread(target=self._monitor_security, daemon=True),
-                threading.Thread(target=self._monitor_workshop, daemon=True),
-                threading.Thread(target=self._monitor_neural_interface, daemon=True)
-            ]
-            for thread in monitoring_threads:
-                thread.start()
-        except Exception as e:
-            logging.error(f"Failed to start monitoring systems: {e}")
-
-    def _monitor_arc_reactor(self):
-        """Monitor arc reactor status and performance"""
-        while True:
-            try:
-                # Simulate real-time monitoring
-                current_temp = self.power_management["temperature"]
-                current_output = self.power_management["current_output"]
-                
-                # Check for critical conditions
-                if current_temp > 80:
-                    self._trigger_emergency_protocol("arc_reactor_overheat")
-                if current_output < 50:
-                    self._trigger_emergency_protocol("arc_reactor_low_power")
-                
-                # Update efficiency based on temperature
-                self.power_management["efficiency"] = 100 - (current_temp - 60) * 0.5
-                
-                time.sleep(1)  # Check every second
-            except Exception as e:
-                logging.error(f"Arc reactor monitoring error: {e}")
-                time.sleep(5)  # Wait before retrying
-
-    def _monitor_security(self):
-        """Monitor security systems and threats"""
-        while True:
-            try:
-                # Simulate security monitoring
-                if self.security["threat_analysis"]:
-                    threat_level = self._analyze_threats()
-                    if threat_level > 7:
-                        self._trigger_emergency_protocol("security_breach")
-                
-                # Rotate encryption keys
-                if self.security["quantum_encryption"]["key_rotation"] == "AUTO":
-                    self._rotate_encryption_keys()
-                
-                time.sleep(2)  # Check every 2 seconds
-            except Exception as e:
-                logging.error(f"Security monitoring error: {e}")
-                time.sleep(5)
-
-    def _monitor_workshop(self):
-        """Monitor workshop conditions and equipment"""
-        while True:
-            try:
-                # Monitor environmental conditions
-                env = self.workshop["environmental_controls"]
-                if env["temperature"] > 30 or env["humidity"] > 70:
-                    self._adjust_environmental_controls()
-                
-                # Check robotic assistants
-                for assistant, data in self.workshop["robotic_assistants"].items():
-                    if data["status"] == "Error":
-                        logging.warning(f"{assistant} needs attention")
-                
-                time.sleep(5)  # Check every 5 seconds
-            except Exception as e:
-                logging.error(f"Workshop monitoring error: {e}")
-                time.sleep(10)
-
-    def _monitor_neural_interface(self):
-        """Monitor neural interface performance"""
-        while True:
-            try:
-                if self.neural_interface["status"] == "ACTIVE":
-                    # Monitor neural response time
-                    if float(self.neural_interface["response_time"].replace("ms", "")) > 0.1:
-                        self._recalibrate_neural_interface()
-                    
-                    # Update thought prediction model
-                    if self.neural_interface["thought_prediction"]:
-                        self._update_thought_prediction()
-                
-                time.sleep(0.1)  # Check every 100ms for real-time response
-            except Exception as e:
-                logging.error(f"Neural interface monitoring error: {e}")
-                time.sleep(1)
-
-    def _trigger_emergency_protocol(self, protocol_name):
-        """Handle emergency protocols"""
-        try:
-            if protocol_name == "arc_reactor_overheat":
-                self.power_management["power_distribution"]["main_systems"] -= 20
-                self.power_management["power_distribution"]["cooling"] = 20
-            elif protocol_name == "security_breach":
-                self.security["defense_systems"]["energy_shields"] = "ACTIVE"
-                self.workshop["workshop_lockdown"] = True
-            elif protocol_name == "neural_interface_failure":
-                self.neural_interface["status"] = "EMERGENCY_SHUTDOWN"
-                self.neural_interface["emergency_override"] = "ACTIVE"
-            
-            logging.warning(f"Emergency protocol triggered: {protocol_name}")
-        except Exception as e:
-            logging.error(f"Failed to trigger emergency protocol: {e}")
-
-    def _analyze_threats(self):
-        """Analyze potential security threats"""
-        # Placeholder for threat analysis logic
-        return random.randint(0, 10)  # Simulate threat level
-
-    def _rotate_encryption_keys(self):
-        """Rotate quantum encryption keys"""
-        try:
-            # Simulate quantum key rotation
-            self.security["quantum_encryption"]["last_rotation"] = datetime.datetime.now()
-        except Exception as e:
-            logging.error(f"Failed to rotate encryption keys: {e}")
-
-    def _adjust_environmental_controls(self):
-        """Adjust workshop environmental controls"""
-        try:
-            current_temp = self.workshop["environmental_controls"]["temperature"]
-            if current_temp > 25:
-                self.workshop["environmental_controls"]["ventilation"] = "Maximum"
-            else:
-                self.workshop["environmental_controls"]["ventilation"] = "Auto"
-        except Exception as e:
-            logging.error(f"Failed to adjust environmental controls: {e}")
-
-    def _recalibrate_neural_interface(self):
-        """Recalibrate neural interface"""
-        try:
-            self.neural_interface["neural_calibration"] = 100
-            self.neural_interface["response_time"] = "0.001ms"
-        except Exception as e:
-            logging.error(f"Failed to recalibrate neural interface: {e}")
-
-    def _update_thought_prediction(self):
-        """Update thought prediction model"""
-        try:
-            # Placeholder for thought prediction model update
-            pass
-        except Exception as e:
-            logging.error(f"Failed to update thought prediction model: {e}")
 
 class JarvisLogger:
     """Advanced logging system for JARVIS"""
@@ -800,437 +59,198 @@ class JarvisLogger:
     def error(self, msg, exc_info=True):
         self.logger.error(msg, exc_info=exc_info)
 
-class JarvisMemory:
-    """Advanced memory and learning system for JARVIS"""
-    def __init__(self, jarvis_instance):
-        self.jarvis = jarvis_instance
-        self.logger = jarvis_instance.logger
-        self.memory_file = 'jarvis_memory.json'
-        self.short_term = []  # Recent interactions
-        self.long_term = {}   # Permanent storage
-        self.max_short_term = 50  # Maximum number of recent memories
+class JarvisAssistant:
+    def __init__(self):
+        self.recognizer = sr.Recognizer()
+        self.speaker = pyttsx3.init()
+        self.speaker.setProperty('rate', 180)  # Faster speech rate because I'm always in a hurry
+        self.speaker.setProperty('voice', 'english+m3')
+        pygame.mixer.init()
         
-        # Enhanced memory categories
-        self.categories = {
-            "conversations": [],
-            "commands": {},
-            "preferences": {},
-            "project_data": {},
-            "learned_responses": {},
-            "important_dates": {},
-            "workshop_notes": [],
-            "suit_data": {},
-            "security_events": [],
-            "system_improvements": [],
-            "user_patterns": {},
-            "error_history": {},
-            "maintenance_logs": []
+        # Initialize volume control
+        devices = AudioUtilities.GetSpeakers()
+        interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        self.volume = cast(interface, POINTER(IAudioEndpointVolume))
+        
+        # Track previous volume for mute/unmute functionality
+        self.previous_volume = self.volume.GetMasterVolumeLevelScalar() * 100
+        self.is_muted = False
+        
+        # Workshop mode settings
+        self.workshop_mode = False
+        self.music_playlist = {
+            "workshop": ["AC/DC - Back In Black", "Black Sabbath - Iron Man", "Led Zeppelin - Immigrant Song"],
+            "study": ["Hans Zimmer - Time", "Mozart - Symphony No. 40", "Bach - Air on G String"]
         }
         
-        # Initialize learning system
-        self.learning_system = {
-            "pattern_recognition": {
-                "command_patterns": {},
-                "conversation_patterns": {},
-                "behavior_patterns": {}
-            },
-            "response_optimization": {
-                "successful_responses": {},
-                "failed_responses": {},
-                "improvement_suggestions": []
-            },
-            "knowledge_base": {
-                "technical": {},
-                "conversational": {},
-                "procedures": {},
-                "preferences": {}
-            }
+        # Initialize workshop camera
+        self.camera = None
+        
+        # Quick access commands
+        self.shortcuts = {
+            "specs": self.show_armor_specs,
+            "calculations": self.run_calculations,
+            "music": self.toggle_workshop_music,
+            "lights": self.toggle_workshop_lights
         }
         
-        # Load existing memories
-        self.load_memories()
-        
-        # Start memory management
-        threading.Thread(target=self._memory_maintenance_loop, daemon=True).start()
-
-    def load_memories(self):
-        """Load and validate memories from storage"""
+        # Initialize Ollama
         try:
-            if os.path.exists(self.memory_file):
-                with open(self.memory_file, 'r') as f:
-                    data = json.load(f)
-                    if self._validate_memory_data(data):
-                        self.long_term = data.get('long_term', {})
-                        self.categories = data.get('categories', self.categories)
-                        self.learning_system["knowledge_base"] = data.get('knowledge_base', 
-                            self.learning_system["knowledge_base"])
-                        self.jarvis.speak("Memory systems online and validated")
-                    else:
-                        raise ValueError("Memory data validation failed")
-            else:
-                self.jarvis.speak("Creating new memory banks")
-                self.save_memories()
+            self.ollama = ollama.Client()
+            self.speak("Ollama AI backup systems initialized")
         except Exception as e:
-            self.logger.error(f"Memory load error: {e}")
-            self.jarvis.speak("Memory retrieval systems offline")
+            self.speak("Warning: Ollama backup systems offline")
+            self.ollama = None
 
-    def _validate_memory_data(self, data):
-        """Validate loaded memory data"""
+        self.logger = JarvisLogger()
+
+        # Initialize function registry
+        self.function_registry = {}
+        # Enable self-improvement mode
+        self.self_improvement_enabled = True
+
+    def speak(self, text):
+        print(f"JARVIS: {text}")
+        self.speaker.say(text)
+        self.speaker.runAndWait()
+
+    def listen(self):
+        """Enhanced listening with extended timeout and dynamic noise adjustment"""
         try:
-            required_keys = ['long_term', 'categories', 'knowledge_base']
-            if not all(key in data for key in required_keys):
+            with sr.Microphone() as source:
+                print("Listening...")
+                # Dynamically adjust for ambient noise
+                self.recognizer.adjust_for_ambient_noise(source, duration=1)
+                try:
+                    # Extended timeout and phrase time limit
+                    audio = self.recognizer.listen(source, timeout=30, phrase_time_limit=60)
+                    text = self.recognizer.recognize_google(audio)
+                    print(f"Boss said: {text}")
+                    return text.lower()
+                except sr.WaitTimeoutError:
+                    self.speak("Still listening, boss. Take your time.")
+                    return self.listen()  # Recursively continue listening
+                except sr.UnknownValueError:
+                    self.speak("Could you repeat that? My audio processing isn't as good as it will be in Mark 2.")
+                    return ""
+                except sr.RequestError as e:
+                    self.speak(f"Network issues. Error: {e}")
+                    return ""
+        except Exception as e:
+            self.speak(f"Sorry boss, having some technical difficulties: {e}")
+            return ""
+
+    def add_function(self, function_name, code_string):
+        """Dynamically add new functions to JARVIS"""
+        try:
+            # Validate and clean the code
+            if 'import' in code_string.lower():
+                self.speak("Sorry boss, can't import modules dynamically for security reasons.")
                 return False
-                
-            # Validate memory structure
-            if not isinstance(data['long_term'], dict):
-                return False
-            if not isinstance(data['categories'], dict):
-                return False
-                
-            # Validate knowledge base
-            kb = data.get('knowledge_base', {})
-            if not all(isinstance(kb.get(k, {}), dict) for k in 
-                ['technical', 'conversational', 'procedures', 'preferences']):
-                return False
-                
+            
+            # Add the function to the class
+            exec(code_string)
+            function_object = locals()[function_name]
+            setattr(JarvisAssistant, function_name, function_object)
+            
+            self.speak(f"Successfully added function {function_name}")
             return True
         except Exception as e:
-            self.logger.error(f"Memory validation error: {e}")
+            self.speak(f"Error adding function: {e}")
             return False
 
-    def save_memories(self):
-        """Save memories with backup"""
+    def fix_missing_function(self, function_name):
+        """Attempt to fix or create missing functions using Ollama"""
         try:
-            # Create backup before saving
-            if os.path.exists(self.memory_file):
-                backup_file = f"{self.memory_file}.backup"
-                shutil.copy2(self.memory_file, backup_file)
-            
-            memory_data = {
-                'long_term': self.long_term,
-                'categories': self.categories,
-                'knowledge_base': self.learning_system["knowledge_base"],
-                'last_updated': datetime.datetime.now().isoformat()
-            }
-            
-            with open(self.memory_file, 'w') as f:
-                json.dump(memory_data, f, indent=4)
-        except Exception as e:
-            self.logger.error(f"Memory save error: {e}")
+            if not self.ollama:
+                self.speak("Boss, I need Ollama running to fix functions.")
+                return False
 
-    def remember(self, category, data, important=False):
-        """Enhanced memory storage with pattern learning"""
-        try:
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            memory = {
-                'timestamp': timestamp,
-                'data': data,
-                'important': important,
-                'context': self._get_current_context()
-            }
+            prompt = f"""Create a Python function named {function_name} for JARVIS.
+            The function should be part of the JarvisAssistant class.
+            Keep it simple and safe. No imports allowed."""
             
-            # Add to short-term memory
-            self.short_term.append(memory)
-            if len(self.short_term) > self.max_short_term:
-                oldest = self.short_term.pop(0)
-                if oldest['important']:
-                    self.long_term[oldest['timestamp']] = oldest
-            
-            # Store in appropriate category
-            if category in self.categories:
-                if isinstance(self.categories[category], list):
-                    self.categories[category].append(memory)
-                elif isinstance(self.categories[category], dict):
-                    key = data.get('key', timestamp)
-                    self.categories[category][key] = memory
-            
-            # Important memories go to long-term storage
-            if important:
-                self.long_term[timestamp] = memory
-                
-            # Learn from new memory
-            self._learn_from_memory(category, memory)
-            
-            # Save after important memories
-            if important:
-                self.save_memories()
-                
-            return True
-        except Exception as e:
-            self.logger.error(f"Memory storage error: {e}")
-            return False
-
-    def _get_current_context(self):
-        """Get current system context"""
-        return {
-            "workshop_mode": self.jarvis.workshop_mode if hasattr(self.jarvis, 'workshop_mode') else False,
-            "current_suit": self.jarvis.suit_interface.current_suit if hasattr(self.jarvis, 'suit_interface') else None,
-            "system_status": self.jarvis.arc_reactor_status if hasattr(self.jarvis, 'arc_reactor_status') else "Unknown"
-        }
-
-    def _learn_from_memory(self, category, memory):
-        """Learn patterns and improve from new memories"""
-        try:
-            # Update pattern recognition
-            if category == "commands":
-                self._update_command_patterns(memory)
-            elif category == "conversations":
-                self._update_conversation_patterns(memory)
-            
-            # Update knowledge base
-            self._update_knowledge_base(category, memory)
-            
-            # Analyze for improvements
-            if category in ["error_history", "system_improvements"]:
-                self._analyze_for_improvements(memory)
-        except Exception as e:
-            self.logger.error(f"Learning error: {e}")
-
-    def _update_command_patterns(self, memory):
-        """Update command pattern recognition"""
-        try:
-            command_data = memory['data']
-            if 'command' in command_data and 'success' in command_data:
-                pattern = command_data['command'].lower()
-                success = command_data['success']
-                
-                patterns = self.learning_system["pattern_recognition"]["command_patterns"]
-                if pattern not in patterns:
-                    patterns[pattern] = {"success": 0, "failure": 0}
-                
-                if success:
-                    patterns[pattern]["success"] += 1
-                else:
-                    patterns[pattern]["failure"] += 1
-        except Exception as e:
-            self.logger.error(f"Command pattern update error: {e}")
-
-    def _update_conversation_patterns(self, memory):
-        """Update conversation pattern recognition"""
-        try:
-            conv_data = memory['data']
-            patterns = self.learning_system["pattern_recognition"]["conversation_patterns"]
-            
-            if 'user' in conv_data:
-                phrases = self._extract_key_phrases(conv_data['user'])
-                for phrase in phrases:
-                    if phrase not in patterns:
-                        patterns[phrase] = {"count": 0, "responses": {}}
-                    patterns[phrase]["count"] += 1
-                    
-                    if 'jarvis' in conv_data:
-                        response = conv_data['jarvis']
-                        if response not in patterns[phrase]["responses"]:
-                            patterns[phrase]["responses"][response] = 0
-                        patterns[phrase]["responses"][response] += 1
-        except Exception as e:
-            self.logger.error(f"Conversation pattern update error: {e}")
-
-    def _extract_key_phrases(self, text):
-        """Extract key phrases from text"""
-        words = text.lower().split()
-        phrases = []
-        for i in range(len(words)):
-            if i < len(words) - 1:
-                phrases.append(f"{words[i]} {words[i+1]}")
-        return phrases
-
-    def _update_knowledge_base(self, category, memory):
-        """Update knowledge base with new information"""
-        try:
-            kb = self.learning_system["knowledge_base"]
-            
-            if category == "technical":
-                if 'topic' in memory['data']:
-                    topic = memory['data']['topic']
-                    if topic not in kb["technical"]:
-                        kb["technical"][topic] = []
-                    kb["technical"][topic].append(memory['data'])
-            
-            elif category == "conversational":
-                if 'pattern' in memory['data']:
-                    pattern = memory['data']['pattern']
-                    if pattern not in kb["conversational"]:
-                        kb["conversational"][pattern] = []
-                    kb["conversational"][pattern].append(memory['data'])
-        except Exception as e:
-            self.logger.error(f"Knowledge base update error: {e}")
-
-    def _analyze_for_improvements(self, memory):
-        """Analyze memory for potential system improvements"""
-        try:
-            if 'error' in memory['data']:
-                error = memory['data']['error']
-                if error not in self.categories['error_history']:
-                    self.categories['error_history'][error] = []
-                self.categories['error_history'][error].append(memory)
-                
-                if len(self.categories['error_history'][error]) >= 3:
-                    self._suggest_improvement(error)
-        except Exception as e:
-            self.logger.error(f"Improvement analysis error: {e}")
-
-    def _suggest_improvement(self, error_pattern):
-        """Generate improvement suggestions"""
-        try:
-            improvements = self.learning_system["response_optimization"]["improvement_suggestions"]
-            
-            suggestion = {
-                "error_pattern": error_pattern,
-                "frequency": len(self.categories['error_history'][error_pattern]),
-                "timestamp": datetime.datetime.now().isoformat(),
-                "suggestion": f"Consider implementing error handling for: {error_pattern}"
-            }
-            
-            improvements.append(suggestion)
-            
-            if hasattr(self.jarvis, 'ollama'):
-                self._generate_improvement_with_ollama(error_pattern)
-        except Exception as e:
-            self.logger.error(f"Improvement suggestion error: {e}")
-
-    def _generate_improvement_with_ollama(self, error_pattern):
-        """Generate improvement suggestion using Ollama"""
-        try:
-            prompt = f"""As JARVIS, analyze this error pattern and suggest improvements:
-            Error Pattern: {error_pattern}
-            Context: Python AI Assistant
-            Goal: Improve error handling and system reliability"""
-            
-            response = self.jarvis.ollama.chat(model='deepseek-r1', messages=[{
+            response = self.ollama.chat(model='llama3.2:1b-instruct-q5_0', messages=[{
                 'role': 'system',
-                'content': 'You are JARVIS, analyzing system improvements.'
+                'content': 'You are a Python expert. Respond only with valid Python function code.'
             }, {
                 'role': 'user',
                 'content': prompt
             }])
-            
+
             if response and 'message' in response:
-                suggestion = response['message']['content']
-                self.learning_system["response_optimization"]["improvement_suggestions"].append({
-                    "error_pattern": error_pattern,
-                    "ai_suggestion": suggestion,
-                    "timestamp": datetime.datetime.now().isoformat()
-                })
-        except Exception as e:
-            self.logger.error(f"Ollama improvement generation error: {e}")
-
-    def _memory_maintenance_loop(self):
-        """Periodic memory maintenance tasks"""
-        while True:
-            try:
-                # Consolidate short-term memories
-                current_time = datetime.datetime.now()
-                for memory in self.short_term[:]:
-                    memory_time = datetime.datetime.strptime(memory['timestamp'], 
-                        "%Y-%m-%d %H:%M:%S")
-                    if (current_time - memory_time).total_seconds() > 3600 and memory['important']:
-                        self.long_term[memory['timestamp']] = memory
-                        self.short_term.remove(memory)
-                
-                # Clean up old memories
-                old_threshold = current_time - datetime.timedelta(days=30)
-                for timestamp, memory in list(self.long_term.items()):
-                    memory_time = datetime.datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
-                    if memory_time < old_threshold and not memory['important']:
-                        del self.long_term[timestamp]
-                
-                # Optimize storage
-                for category in self.categories:
-                    if isinstance(self.categories[category], list):
-                        self.categories[category] = self.categories[category][-1000:]
-                
-                time.sleep(3600)  # Run maintenance every hour
-            except Exception as e:
-                self.logger.error(f"Memory maintenance error: {e}")
-                time.sleep(300)  # Retry after 5 minutes
-
-    def recall(self, category=None, query=None, limit=5):
-        """Enhanced memory recall with pattern matching"""
-        try:
-            results = []
-            
-            # Search in specific category
-            if category and category in self.categories:
-                memories = self.categories[category]
-                if query:
-                    if isinstance(memories, list):
-                        results.extend([m for m in memories 
-                            if self._memory_matches_query(m, query)])
-                    elif isinstance(memories, dict):
-                        results.extend([v for v in memories.values() 
-                            if self._memory_matches_query(v, query)])
-                else:
-                    if isinstance(memories, list):
-                        results.extend(memories)
-                    elif isinstance(memories, dict):
-                        results.extend(memories.values())
-            
-            # Search all categories if none specified
-            elif query:
-                for cat, memories in self.categories.items():
-                    if isinstance(memories, list):
-                        results.extend([m for m in memories 
-                            if self._memory_matches_query(m, query)])
-                    elif isinstance(memories, dict):
-                        results.extend([v for v in memories.values() 
-                            if self._memory_matches_query(v, query)])
-            
-            # Sort by timestamp and importance
-            results.sort(key=lambda x: (x['important'], x['timestamp']), reverse=True)
-            
-            return results[:limit]
-        except Exception as e:
-            self.logger.error(f"Memory recall error: {e}")
-            return []
-
-    def _memory_matches_query(self, memory, query):
-        """Check if memory matches search query"""
-        try:
-            query = query.lower()
-            memory_str = str(memory['data']).lower()
-            
-            # Direct match
-            if query in memory_str:
-                return True
-            
-            # Pattern match
-            patterns = self.learning_system["pattern_recognition"]["command_patterns"]
-            if query in patterns:
-                return True
-            
-            # Semantic match using Ollama if available
-            if hasattr(self.jarvis, 'ollama'):
-                similarity = self._calculate_semantic_similarity(query, memory_str)
-                return similarity > 0.8
-            
+                code = response['message']['content']
+                return self.add_function(function_name, code)
             return False
         except Exception as e:
-            self.logger.error(f"Memory matching error: {e}")
+            self.speak(f"Error fixing function: {e}")
             return False
 
-    def _calculate_semantic_similarity(self, query, text):
-        """Calculate semantic similarity using Ollama"""
+    def self_improve(self):
+        """Analyze and improve JARVIS's own code"""
         try:
-            response = self.jarvis.ollama.chat(model='deepseek-r1', messages=[{
+            # Get current file content
+            with open(__file__, 'r') as f:
+                current_code = f.read()
+
+            # Ask Ollama for improvements
+            response = self.ollama.chat(model='deepseek-r1', messages=[{
                 'role': 'system',
-                'content': 'Calculate semantic similarity between two texts (0-1).'
+                'content': 'You are a Python expert. Analyze code and suggest improvements.'
             }, {
                 'role': 'user',
-                'content': f"Text 1: {query}\nText 2: {text}"
+                'content': f"Analyze and improve this code:\n{current_code}"
             }])
-            
+
             if response and 'message' in response:
-                # Extract similarity score from response
-                try:
-                    score = float(response['message']['content'])
-                    return min(max(score, 0), 1)  # Ensure score is between 0 and 1
-                except:
-                    return 0.5
-            return 0.5
+                improvements = response['message']['content']
+                
+                # Log improvements for review
+                with open('jarvis_improvements.log', 'a') as f:
+                    f.write(f"\n--- Improvements suggested at {datetime.datetime.now()} ---\n")
+                    f.write(improvements)
+                
+                self.speak("I've logged some potential improvements for your review, boss.")
+                return True
+            return False
         except Exception as e:
-            self.logger.error(f"Semantic similarity calculation error: {e}")
-            return 0.5
+            self.speak(f"Self-improvement routine failed: {e}")
+            return False
+
+    def set_volume(self, level):
+        """Set system volume (0-100) with safety checks"""
+        try:
+            # Sanitize input
+            if isinstance(level, str):
+                level = ''.join(filter(str.isdigit, level))
+            level = int(level)
+            
+            if not 0 <= level <= 100:
+                self.speak("Come on boss, volume needs to be between 0 and 100!")
+                return False
+            
+            vol = level / 100
+            self.volume.SetMasterVolumeLevelScalar(vol, None)
+            self.is_muted = False
+            self.previous_volume = level
+            self.speak(f"Volume set to {level}%")
+            return True
+        except Exception as e:
+            self.speak("Houston, we have a problem with the volume controls!")
+            return False
+
+    def mute_volume(self):
+        """Mute with state tracking and error handling"""
+        try:
+            if not self.is_muted:
+                self.previous_volume = self.volume.GetMasterVolumeLevelScalar() * 100
+                self.volume.SetMute(1, None)  # Actually mute the system
+                self.is_muted = True
+                self.speak("Muted. Finally, some peace and quiet!")
+            else:
+                self.speak("Already muted, boss!")
+        except Exception as e:
+            self.speak("Muting system malfunction. Have you been tinkering with my code again?")
 
     def unmute_volume(self):
         """Unmute with state tracking and error handling"""
@@ -1245,6 +265,291 @@ class JarvisMemory:
                 self.speak("System isn't muted, boss. Maybe check your headphones?")
         except Exception as e:
             self.speak("Unmuting system malfunction. Did DUM-E mess with the wiring again?")
+
+    def media_control(self, action):
+        """Enhanced media control using keyboard library"""
+        try:
+            # Handle volume controls separately
+            if action == "mute":
+                self.mute_volume()
+                return True
+            elif action == "unmute":
+                self.unmute_volume()
+                return True
+            elif action == "volume_up":
+                return self.set_volume(min(self.previous_volume + 10, 100))
+            elif action == "volume_down":
+                return self.set_volume(max(self.previous_volume - 10, 0))
+            
+            # Handle media keys with keyboard library
+            media_actions = {
+                "play": "play/pause media",
+                "pause": "play/pause media",
+                "next": "next track",
+                "previous": "previous track"
+            }
+            
+            if action in media_actions:
+                keyboard.send(media_actions[action])
+                self.speak(f"Media {action} command executed")
+                return True
+            
+            self.speak(f"Sorry boss, '{action}' isn't in my command list yet. Want me to add it?")
+            return False
+            
+        except Exception as e:
+            self.speak(f"Media control malfunction. Error: {str(e)}")
+            return False
+
+    def quick_research(self, query):
+        """Quick Wikipedia lookup for technical stuff"""
+        try:
+            result = wikipedia.summary(query, sentences=2)
+            self.speak(result)
+        except:
+            self.speak("Sorry boss, couldn't find that in my database.")
+
+    def toggle_workshop_mode(self):
+        """Toggle workshop mode with specific settings"""
+        self.workshop_mode = not self.workshop_mode
+        if self.workshop_mode:
+            self.speak("Entering workshop mode. Initializing systems and starting AC/DC playlist.")
+            self.set_volume(70)  # Louder for workshop
+            self.camera = cv2.VideoCapture(0)  # Start workshop camera
+        else:
+            self.speak("Exiting workshop mode. Powering down workshop systems.")
+            self.set_volume(50)  # Normal volume
+            if self.camera:
+                self.camera.release()
+
+    def get_system_stats(self):
+        cpu_usage = psutil.cpu_percent()
+        memory = psutil.virtual_memory()
+        memory_usage = memory.percent
+        battery = psutil.sensors_battery()
+        battery_percent = battery.percent if battery else "N/A"
+        return f"CPU usage is at {cpu_usage}%. Memory usage is at {memory_usage}%. Battery is at {battery_percent}%."
+
+    def show_armor_specs(self):
+        """Display current armor specifications"""
+        specs = {
+            "Mark 1": "Prototype - Basic flight capabilities",
+            "Status": "In development",
+            "Power": "Arc Reactor v0.1",
+            "Flight time": "Estimated 5 minutes"
+        }
+        for key, value in specs.items():
+            self.speak(f"{key}: {value}")
+
+    def run_calculations(self):
+        """Run quick engineering calculations"""
+        self.speak("Running thrust to weight calculations for Mark 1")
+        # Placeholder for actual calculations
+        thrust = 1000  # N
+        weight = 800  # N
+        ratio = thrust/weight
+        self.speak(f"Current thrust to weight ratio is {ratio:.2f}")
+
+    def toggle_workshop_music(self):
+        """Toggle workshop playlist"""
+        if self.workshop_mode:
+            self.speak("Playing workshop playlist")
+            # Placeholder for actual music control
+            self.speak("Now playing: AC/DC - Back In Black")
+
+    def toggle_workshop_lights(self):
+        """Control workshop lights"""
+        self.speak("Workshop lights toggled")
+        # Placeholder for actual light control
+
+    def get_time(self):
+        """Get current time"""
+        return datetime.datetime.now().strftime("%I:%M %p")
+
+    def get_date(self):
+        """Get current date"""
+        return datetime.datetime.now().strftime("%B %d, %Y")
+
+    def search_web(self, query):
+        """Open web search for a query"""
+        webbrowser.open(f"https://www.google.com/search?q={query}")
+
+    def get_weather(self, city):
+        """Get weather information for a city"""
+        try:
+            api_key = "YOUR_OPENWEATHERMAP_API_KEY"  # Replace with actual API key
+            base_url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric"
+            response = requests.get(base_url)
+            data = response.json()
+            
+            if data["cod"] != 200:
+                return f"Sorry, couldn't find weather information for {city}"
+            
+            temp = data['main']['temp']
+            description = data['weather'][0]['description']
+            return f"Weather in {city}: {description}, Temperature: {temp}°C"
+        except Exception as e:
+            return f"Error retrieving weather: {str(e)}"
+
+    def ask_ollama(self, query):
+        """Use Ollama as fallback for unknown commands"""
+        try:
+            if not self.ollama:
+                return None
+            
+            response = self.ollama.chat(model='llama3.2:1b-instruct-q5_0', messages=[{
+                'role': 'system',
+                'content': 'You are JARVIS, a helpful AI assistant created by young Tony Stark. Keep responses brief and witty.'
+            }, {
+                'role': 'user',
+                'content': query
+            }])
+            
+            return response['message']['content']
+        except Exception as e:
+            return None
+
+    def get_command_intent(self, command):
+        """Advanced command interpretation using Ollama"""
+        try:
+            if not self.ollama:
+                return None, None, {}
+            
+            system_prompt = """You are JARVIS's command interpreter. You MUST respond in valid JSON format.
+            
+            Available Functions and Response Formats:
+
+            1. MEDIA:
+            - YouTube: "play Back in Black on YouTube"
+            {
+                "category": "MEDIA",
+                "action": "youtube",
+                "parameters": {"type": "play", "query": "Back in Black"}
+            }
+            
+            - Volume: "set volume to 50" / "mute" / "unmute"
+            {
+                "category": "MEDIA",
+                "action": "volume_control",
+                "parameters": {"action": "set", "level": 50}
+            }
+            
+            - Media Controls: "pause music" / "next track"
+            {
+                "category": "MEDIA",
+                "action": "media_control",
+                "parameters": {"action": "pause"}
+            }
+
+            2. PC_CONTROL:
+            - System: "put pc to sleep" / "lock computer" / "take screenshot"
+            {
+                "category": "PC_CONTROL",
+                "action": "sleep/lock/screenshot",
+                "parameters": {}
+            }
+
+            3. FILES:
+            - File Operations: "create file test.txt in documents"
+            {
+                "category": "FILES",
+                "action": "create/open",
+                "parameters": {"filename": "test.txt", "folder": "documents"}
+            }
+
+            4. APPS:
+            - Launch: "open freecad" / "launch firefox"
+            {
+                "category": "APPS",
+                "action": "launch",
+                "parameters": {"app_name": "freecad"}
+            }
+
+            5. WORKSPACE:
+            - Management: "save workspace" / "arrange windows"
+            {
+                "category": "WORKSPACE",
+                "action": "save/load/window",
+                "parameters": {"type": "study", "action": "arrange"}
+            }
+
+            6. PRODUCTIVITY:
+            - Focus: "enable focus mode" / "start pomodoro"
+            {
+                "category": "PRODUCTIVITY",
+                "action": "focus_mode/pomodoro",
+                "parameters": {}
+            }
+            
+            - Timer: "set timer for 30 minutes for suit calibration"
+            {
+                "category": "PRODUCTIVITY",
+                "action": "timer",
+                "parameters": {"duration": 30, "label": "suit calibration"}
+            }
+            
+            - Notes: "add note: need to optimize thrusters"
+            {
+                "category": "PRODUCTIVITY",
+                "action": "notes",
+                "parameters": {"action": "add", "content": "need to optimize thrusters"}
+            }
+            
+            - Projects: "add project Mark 1 Suit" / "update project Mark 1 to Testing"
+            {
+                "category": "PRODUCTIVITY",
+                "action": "project",
+                "parameters": {"action": "add", "name": "Mark 1 Suit", "status": "Testing"}
+            }
+
+            7. RESEARCH:
+            - Web: "search for quantum physics" / "what's the weather in New York"
+            {
+                "category": "RESEARCH",
+                "action": "web_search/weather",
+                "parameters": {"query": "quantum physics", "city": "New York"}
+            }
+
+            8. WORKSHOP:
+            - Controls: "enter workshop mode" / "show armor specs"
+            {
+                "category": "WORKSHOP",
+                "action": "mode/specs/calculations",
+                "parameters": {"status": "enter"}
+            }
+
+            For general questions, use:
+            {
+                "category": "general_query",
+                "action": "ask",
+                "parameters": {"query": "original question"}
+            }
+
+            Remove any polite phrases or extra words from parameters.
+            Only respond with the JSON object, nothing else."""
+
+            response = self.ollama.chat(model='llama3.2:1b-instruct-q5_0', messages=[
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': f"Interpret this command: {command}"}
+            ])
+
+            try:
+                # Clean the response to ensure it's valid JSON
+                content = response['message']['content'].strip()
+                if '{' in content:
+                    content = content[content.find('{'):content.rfind('}')+1]
+                
+                result = json.loads(content)
+                print(f"AI Interpretation: {result}")  # Debug print
+                return result["category"], result["action"], result.get("parameters", {})
+            except Exception as e:
+                print(f"JSON parsing error: {e}")
+                # Try to extract intent directly from command
+                return self.fallback_intent_extraction(command)
+
+        except Exception as e:
+            print(f"Ollama error: {e}")
+            return None, None, {}
 
     def fallback_intent_extraction(self, command):
         """Fallback method for intent extraction when AI fails"""
@@ -1272,11 +577,288 @@ class JarvisMemory:
             except:
                 pass
         
-        # System patterns
-        if "shutdown" in command or "exit" in command:
-            return "SYSTEM", "shutdown", {}
+        # Project patterns
+        if "project" in command:
+            if "add" in command:
+                name = command.replace("add", "").replace("project", "").strip()
+                return "PRODUCTIVITY", "project", {"action": "add", "name": name}
+            elif "update" in command:
+                parts = command.split("to")
+                name = parts[0].replace("update", "").replace("project", "").strip()
+                status = parts[1].strip() if len(parts) > 1 else "In Progress"
+                return "PRODUCTIVITY", "project", {"action": "update", "name": name, "status": status}
         
         return None, None, {}
+
+    def process_command(self, command):
+        """Enhanced command processing with AI understanding"""
+        if not command:
+            return
+
+        # Get command intent from Ollama
+        category, action, params = self.get_command_intent(command)
+        print(f"Processing: category={category}, action={action}, params={params}")  # Debug print
+        
+        if category == "MEDIA" and action == "youtube":
+            if params.get("type") == "play":
+                self.play_youtube(params["query"])
+                return
+        
+        # If no specific match or if Ollama failed, try legacy processing
+        if not category:
+            # Check for YouTube-related keywords
+            if "youtube" in command.lower() or ("play" in command.lower() and any(song in command.lower() for song in ["back in black", "ac/dc"])):
+                query = command.lower().replace("play", "").replace("youtube", "").replace("on", "").strip()
+                self.play_youtube(query)
+                return
+        
+        # Rest of the command processing...
+        try:
+            if category == "MEDIA":
+                if action == "volume_control":
+                    if "level" in params:
+                        self.set_volume(params["level"])
+                    elif params.get("action") == "mute":
+                        self.mute_volume()
+                    elif params.get("action") == "unmute":
+                        self.unmute_volume()
+                elif action == "youtube":
+                    if params.get("type") == "play":
+                        self.play_youtube(params["query"])
+                    elif params.get("type") == "search":
+                        self.search_youtube(params["query"])
+                elif action == "media_control":
+                    self.media_control(params["action"])
+
+            elif category == "PC_CONTROL":
+                self.pc_control(action)
+
+            elif category == "FILES":
+                self.file_operations(action, 
+                                   filename=params.get("filename"),
+                                   folder=params.get("folder"))
+
+            elif category == "APPS":
+                self.launch_application(params["app_name"])
+
+            elif category == "WORKSPACE":
+                if action == "save":
+                    self.save_current_workspace()
+                elif action == "load":
+                    self.load_workspace(params["type"])
+                elif action == "window":
+                    self.window_management(params["action"])
+
+            elif category == "PRODUCTIVITY":
+                if action == "focus_mode":
+                    self.toggle_focus_mode()
+                elif action == "pomodoro":
+                    self.pomodoro_timer()
+                elif action == "timer":
+                    self.timer(params["duration"], params.get("label", ""))
+                elif action == "notes":
+                    self.quick_notes(params["action"], params.get("content"))
+                elif action == "project":
+                    self.project_tracker(params["action"], 
+                                       params.get("name"),
+                                       params.get("status"))
+
+            elif category == "RESEARCH":
+                if action == "weather":
+                    self.get_weather(params["city"])
+                elif action == "web_search":
+                    self.search_web(params["query"])
+                elif action == "web_search/trending":
+                    self.social_media.get_trending_topics()
+
+            elif category == "general_query":
+                if self.ollama:
+                    response = self.ask_ollama(command)
+                    if response:
+                        self.speak(response)
+
+            elif category == "EMAIL":
+                if action == "check":
+                    self.email_manager.check_emails()
+                elif action == "summarize":
+                    self.email_manager.summarize_emails()
+                elif action == "read":
+                    email_index = params.get("index", 1)
+                    self.email_manager.read_email(email_index)
+
+            if "add function" in command:
+                function_name = command.split("add function")[-1].strip()
+                self.speak(f"Ready to add function {function_name}. Please provide the code.")
+                code = self.listen()  # Get the function code
+                self.add_function(function_name, code)
+                return
+
+            if "fix function" in command:
+                function_name = command.split("fix function")[-1].strip()
+                self.fix_missing_function(function_name)
+                return
+
+            if "improve yourself" in command or "self improve" in command:
+                self.speak("Initiating self-improvement protocols")
+                self.self_improve()
+                return
+
+        except Exception as e:
+            self.speak(f"I understood what you wanted, but had trouble executing it. Error: {str(e)}")
+            # Fallback to legacy command processing
+            self.legacy_process_command(command)
+
+    def _handle_research(self, action, params):
+        """Optimized research command handling"""
+        if action == "web_search/trending":
+            self.social_media.get_trending_topics()
+        elif action == "weather":
+            self.get_weather(params.get("city", "local"))
+
+    def run(self):
+        try:
+            self.speak("JARVIS Mark 1 online. Ready to assist you in the workshop, boss.")
+            while True:
+                command = self.listen()
+                if command:
+                    if "goodbye" in command or "power down" in command:
+                        self.speak("Powering down systems. Don't stay up too late working on the suit, boss.")
+                        break
+                    self.process_command(command)
+        except KeyboardInterrupt:
+            print("\nJARVIS: Shutting down gracefully. Goodbye, boss.")
+            # Clean up resources if needed
+            if self.camera:
+                self.camera.release()
+            pygame.mixer.quit()
+
+    def start_workshop_camera(self):
+        """Initialize workshop camera feed"""
+        try:
+            if not self.camera:
+                self.camera = cv2.VideoCapture(0)
+                self.speak("Workshop camera activated")
+        except Exception as e:
+            self.speak("Camera initialization failed. Check the connections, boss.")
+
+    def stop_workshop_camera(self):
+        """Stop workshop camera feed"""
+        if self.camera:
+            self.camera.release()
+            self.camera = None
+            self.speak("Workshop camera deactivated")
+
+    def save_current_workspace(self):
+        """Save current window layout and settings"""
+        try:
+            # Get current window positions and active applications
+            active_apps = [p.name() for p in psutil.process_iter(['name'])]
+            workspace_data = {
+                "apps": active_apps,
+                "volume": self.volume.GetMasterVolumeLevelScalar() * 100,
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            # Save to JSON file
+            with open('workspace_config.json', 'w') as f:
+                json.dump(workspace_data, f)
+            self.speak("Current workspace configuration saved")
+        except Exception as e:
+            self.speak("Failed to save workspace configuration")
+
+    def show_help(self):
+        """Display available commands"""
+        help_text = """
+        Available commands:
+
+        MEDIA & SOUND:
+        - Volume: mute, unmute, volume up/down, set volume [0-100]
+        - Media: play, pause, next, previous
+        - YouTube: play youtube [song], search youtube [query]
+        - Music: playlist [workshop/study]
+
+        WORKSHOP & PRODUCTIVITY:
+        - Workshop: workshop mode, camera on/off, specs, calculations
+        - Focus: focus mode, pomodoro, start working
+        - Timer: timer [minutes] for [label]
+        - Notes: add note [text], read notes
+        - Projects: add project [name], update project [name] to [status], list projects
+
+        SYSTEM & PC CONTROL:
+        - System: time, date, system status, diagnostics
+        - PC: pc sleep, pc restart, pc shutdown, pc lock, screenshot
+        - Windows: minimize all, maximize, arrange windows
+        - Backup: backup, auto backup
+
+        FILES & APPLICATIONS:
+        - Files: create file [name] in [folder], open file [name] in [folder]
+        - Apps: open [freecad/firefox/chrome/code/fusion360/spotify/vlc/blender]
+        - Launch: launch [app_name]
+
+        WORKSPACE & RESEARCH:
+        - Workspace: load workspace [study/engineering], save workspace
+        - Web: search [query], browse [url]
+        - Weather: weather [city]
+        - Research: research [topic], look up [topic]
+
+        MISCELLANEOUS:
+        - Help: help, what can you do
+        - Motivation: motivate me
+        - System: shutdown, goodbye
+
+        You can also ask me general questions and I'll try my best to help!
+        For example: "Who is Benjamin Franklin?" or "When did Back to the Future release?"
+        
+        Need more specific help with any command? Just ask!
+        """
+        self.speak(help_text)
+
+    def quick_notes(self, action, note=None):
+        """Quick note-taking system"""
+        notes_file = 'jarvis_notes.json'
+        try:
+            if action == "add" and note:
+                with open(notes_file, 'r+') as f:
+                    try:
+                        notes = json.load(f)
+                    except:
+                        notes = []
+                    notes.append({
+                        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "note": note
+                    })
+                    f.seek(0)
+                    json.dump(notes, f)
+                self.speak("Note saved, boss")
+            elif action == "read":
+                with open(notes_file, 'r') as f:
+                    notes = json.load(f)
+                    recent_notes = notes[-3:]  # Get last 3 notes
+                    self.speak("Here are your recent notes:")
+                    for note in recent_notes:
+                        self.speak(note["note"])
+        except Exception as e:
+            self.speak("Had trouble with the notes system, boss")
+
+    def toggle_focus_mode(self):
+        """Enable/disable focus mode"""
+        try:
+            if not hasattr(self, 'focus_mode'):
+                self.focus_mode = False
+            
+            self.focus_mode = not self.focus_mode
+            if self.focus_mode:
+                self.previous_volume = self.volume.GetMasterVolumeLevelScalar() * 100
+                self.set_volume(30)  # Lower volume
+                self.speak("Focus mode enabled. Minimizing distractions and starting study playlist.")
+                # Close distracting apps
+                for app in ["discord.exe", "steam.exe", "chrome.exe"]:
+                    os.system(f"taskkill /f /im {app} > nul 2>&1")
+                self.play_playlist("study")
+            else:
+                self.set_volume(int(self.previous_volume))
+                self.speak("Focus mode disabled. Welcome back to chaos, boss!")
+        except Exception as e:
+            self.speak("Focus mode malfunction. Check the connections, boss.")
 
     def random_motivation(self):
         """Generate random motivational quote"""
@@ -1293,19 +875,12 @@ class JarvisMemory:
         """Set a timer with optional label"""
         def timer_done():
             self.speak(f"Time's up, boss! {label}")
-            try:
-                pygame.mixer.music.load('alert.wav')
-                pygame.mixer.music.play()
-            except Exception as e:
-                self.logger.error(f"Alert sound failed: {e}")
+            pygame.mixer.music.load('alert.wav')
+            pygame.mixer.music.play()
 
-        try:
-            minutes = int(duration)
-            threading.Timer(minutes * 60, timer_done).start()
-            self.speak(f"Timer set for {minutes} minutes. {label}")
-        except Exception as e:
-            self.logger.error(f"Timer error: {e}")
-            self.speak("Failed to set timer. Please try again.")
+        minutes = int(duration)
+        threading.Timer(minutes * 60, timer_done).start()
+        self.speak(f"Timer set for {minutes} minutes. {label}")
 
     def quick_launch(self, app_name):
         """Quick launch applications with fuzzy matching"""
@@ -1567,20 +1142,52 @@ class JarvisMemory:
             
             self.speak(f"Searching YouTube for {query}")
             
-            # Open YouTube search results
+            # Try using youtube_search first
+            try:
+                from youtube_search import YoutubeSearch
+                results = YoutubeSearch(query, max_results=3).to_dict()
+                if results:
+                    # Try to find the most relevant result
+                    best_match = None
+                    for result in results:
+                        title = result['title'].lower()
+                        # Check if title contains all the important words from query
+                        query_words = set(query.lower().split())
+                        title_words = set(title.split())
+                        if query_words.issubset(title_words):
+                            best_match = result
+                            break
+                    
+                    # Use best match or first result
+                    video = best_match or results[0]
+                    video_url = f"https://youtube.com{video['url_suffix']}"
+                    self.speak(f"Playing {video['title']}")
+                    
+                    # Try multiple browser methods
+                    try:
+                        # Try Firefox first
+                        webbrowser.get('firefox').open_new(video_url)
+                    except:
+                        try:
+                            # Try Chrome next
+                            webbrowser.get('chrome').open_new(video_url)
+                        except:
+                            # Fall back to default browser
+                            webbrowser.open(video_url)
+                    return
+                    
+            except ImportError:
+                pass  # Fall back to search if youtube_search isn't available
+            
+            # Fallback: Open YouTube search results
             search_url = f"https://www.youtube.com/results?search_query={query.replace(' ', '+')}"
             try:
-                webbrowser.get('firefox').open_new(search_url)
-            except:
-                try:
-                    webbrowser.get('chrome').open_new(search_url)
-                except:
-                    webbrowser.open(search_url)
-                    
-            self.speak(f"Opening YouTube search results for {query}")
+                webbrowser.open(search_url)
+                self.speak("Opening YouTube search results")
+            except Exception as e:
+                self.speak(f"Failed to open browser. Error: {str(e)}")
         
         except Exception as e:
-            self.logger.error(f"YouTube playback failed: {e}")
             self.speak("YouTube playback failed. Check your internet connection, boss.")
 
     def search_youtube(self, query):
@@ -1679,513 +1286,427 @@ class JarvisMemory:
             self.speak(f"Project operation failed: {str(e)}")
             return False
 
-    def workshop_mode_features(self):
-        """Enhanced workshop mode with project tracking"""
-        try:
-            # Add project tracking
-            self.current_project = None
-            self.project_timers = {}
-            self.measurements = []
-            self.safety_checks = {
-                "ventilation": False,
-                "power_stable": False,
-                "safety_gear": False
-            }
-            
-            # Add workshop commands
-            self.workshop_commands = {
-                "start project": self.start_project,
-                "end project": self.end_project,
-                "save measurement": self.save_measurement,
-                "safety check": self.run_safety_check,
-                "tool tracking": self.track_tools,
-                "quick calc": self.quick_calculation
-            }
-            
-            return True
-        except Exception as e:
-            self.logger.error(f"Workshop mode initialization failed: {e}")
-            return False
+class AutomationEngine:
+    """Advanced task automation system"""
+    def __init__(self, jarvis_instance):
+        self.jarvis = jarvis_instance
+        self.logger = jarvis_instance.logger
+        self.tasks_file = 'config/automated_tasks.json'
+        self.running_tasks = {}
+        
+        # Task scheduling
+        self.scheduler = BackgroundScheduler()
+        self.scheduler.start()
+        
+        # Load saved tasks
+        self.load_tasks()
 
-    def start_project(self, project_name=None):
-        """Start a new project with timing and tracking"""
+    def add_task(self, name, trigger_type, actions, schedule=None):
+        """Add automated task with multiple triggers and actions"""
         try:
-            if not project_name:
-                self.speak("What should I call this project, boss?")
-                project_name = self.listen()
-            
-            self.current_project = project_name
-            self.project_timers[project_name] = {
-                "start_time": datetime.datetime.now(),
-                "breaks": [],
-                "total_time": 0
+            task = {
+                "name": name,
+                "trigger_type": trigger_type,  # time, event, condition
+                "actions": actions,
+                "schedule": schedule,
+                "created": datetime.now().isoformat(),
+                "last_run": None,
+                "status": "active"
             }
             
-            # Store in memory
-            if hasattr(self, 'memory') and self.memory:
-                self.memory.remember('project_data', {
-                    'project': project_name,
-                    'action': 'start',
-                    'timestamp': datetime.datetime.now().isoformat()
-                }, important=True)
+            # Schedule the task based on trigger type
+            if trigger_type == "time" and schedule:
+                job = self.scheduler.add_job(
+                    self.execute_task,
+                    'cron',
+                    **schedule,
+                    args=[name, actions]
+                )
+                self.running_tasks[name] = job
             
-            self.speak(f"Project {project_name} started. Timer running.")
+            # Save task configuration
+            self._save_tasks()
+            
+            self.jarvis.speak(f"Task {name} automated successfully")
             
         except Exception as e:
-            self.logger.error(f"Error starting project: {e}")
-            self.speak("Failed to start project tracking")
+            self.logger.error(f"Failed to add task: {e}")
+            self.jarvis.speak("Task automation failed")
 
-    def end_project(self, project_name=None):
-        """End project and save data"""
+    def execute_task(self, name, actions):
+        """Execute a series of automated actions"""
         try:
-            if not project_name:
-                project_name = self.current_project
+            self.logger.info(f"Executing task: {name}")
             
-            if project_name in self.project_timers:
-                end_time = datetime.datetime.now()
-                start_time = self.project_timers[project_name]["start_time"]
-                total_time = (end_time - start_time).total_seconds() / 3600  # Hours
+            for action in actions:
+                action_type = action["type"]
+                params = action["parameters"]
                 
-                # Store project completion
-                if hasattr(self, 'memory') and self.memory:
-                    self.memory.remember('project_data', {
-                        'project': project_name,
-                        'action': 'complete',
-                        'total_time': total_time,
-                        'timestamp': end_time.isoformat()
-                    }, important=True)
+                if action_type == "open_app":
+                    self.jarvis.launch_application(params["app_name"])
                 
-                self.speak(f"Project {project_name} completed. Total time: {total_time:.1f} hours")
-                del self.project_timers[project_name]
-                self.current_project = None
+                elif action_type == "workspace":
+                    self.jarvis.workspace_manager.load(params["workspace_type"])
+                
+                elif action_type == "command":
+                    self.jarvis.process_command(params["command"])
+                
+                elif action_type == "script":
+                    self._run_script(params["script_path"], params.get("args", []))
+                
+                time.sleep(action.get("delay", 1))  # Delay between actions
+            
+            self._update_task_status(name, "completed")
+            
+        except Exception as e:
+            self.logger.error(f"Task execution failed: {e}")
+            self._update_task_status(name, "failed")
+
+class EngineeringTools:
+    """Engineering and development tools integration"""
+    def __init__(self, jarvis_instance):
+        self.jarvis = jarvis_instance
+        self.logger = jarvis_instance.logger
+        
+        # Load engineering configurations
+        self.load_configs()
+        
+        # Initialize CAD integration
+        self.init_cad_integration()
+        
+        # Setup calculation engine
+        self.calc_engine = self.setup_calculation_engine()
+
+    def init_cad_integration(self):
+        """Initialize CAD software integration"""
+        try:
+            # Support for multiple CAD systems
+            self.cad_systems = {
+                "freecad": {
+                    "path": "path/to/freecad",
+                    "api": self._load_freecad_api()
+                },
+                "fusion360": {
+                    "path": "path/to/fusion360",
+                    "api": self._load_fusion360_api()
+                }
+            }
+        except Exception as e:
+            self.logger.error(f"CAD integration failed: {e}")
+
+    def engineering_calculation(self, calc_type, parameters):
+        """Perform engineering calculations"""
+        try:
+            if calc_type == "stress":
+                return self._calculate_stress(parameters)
+            elif calc_type == "thermal":
+                return self._calculate_thermal(parameters)
+            elif calc_type == "fluid":
+                return self._calculate_fluid_dynamics(parameters)
             else:
-                self.speak("No active project found with that name")
-                
+                raise ValueError(f"Unknown calculation type: {calc_type}")
         except Exception as e:
-            self.logger.error(f"Error ending project: {e}")
-            self.speak("Failed to end project tracking")
-
-    def save_measurement(self, measurement):
-        """Save workshop measurements"""
-        try:
-            if isinstance(measurement, str):
-                # Try to parse measurement string
-                try:
-                    value = float(''.join(filter(str.isdigit, measurement)))
-                    unit = ''.join(filter(str.isalpha, measurement))
-                    measurement = {"value": value, "unit": unit}
-                except:
-                    self.speak("Could not parse measurement format")
-                    return
-            
-            self.measurements.append({
-                "measurement": measurement,
-                "timestamp": datetime.datetime.now().isoformat(),
-                "project": self.current_project
-            })
-            
-            self.speak(f"Measurement saved: {measurement['value']} {measurement['unit']}")
-            
-        except Exception as e:
-            self.logger.error(f"Error saving measurement: {e}")
-            self.speak("Failed to save measurement")
-
-    def run_safety_check(self):
-        """Run workshop safety checks"""
-        try:
-            checks = {
-                "ventilation": self._check_ventilation(),
-                "power": self._check_power_stability(),
-                "safety_gear": self._check_safety_gear(),
-                "emergency_systems": self._check_emergency_systems(),
-                "tool_status": self._check_tool_status()
-            }
-            
-            all_passed = all(checks.values())
-            if all_passed:
-                self.speak("All safety checks passed. Workshop is secure.")
-            else:
-                failed = [k for k, v in checks.items() if not v]
-                self.speak(f"Safety check failed for: {', '.join(failed)}")
-            
-            return all_passed
-            
-        except Exception as e:
-            self.logger.error(f"Safety check error: {e}")
-            self.speak("Error running safety checks")
-            return False
-
-    def _check_ventilation(self):
-        """Check workshop ventilation"""
-        try:
-            return self.workshop["environmental_controls"]["ventilation"] == "Active"
-        except:
-            return False
-
-    def _check_power_stability(self):
-        """Check power systems stability"""
-        try:
-            return (self.power_management["efficiency"] > 90 and 
-                    self.power_management["current_output"] > 80)
-        except:
-            return False
-
-    def _check_safety_gear(self):
-        """Check if safety gear is in place"""
-        # Placeholder - would integrate with actual sensors
-        return True
-
-    def _check_emergency_systems(self):
-        """Check emergency systems status"""
-        try:
-            return (self.security["defense_systems"]["emergency_lockdown"] == "READY" and
-                    self.power_management["backup_power"]["status"] == "STANDBY")
-        except:
-            return False
-
-    def _check_tool_status(self):
-        """Check status of workshop tools"""
-        try:
-            return all(assistant["status"] == "Online" 
-                      for assistant in self.workshop["robotic_assistants"].values())
-        except:
-            return False
-
-    def track_tools(self):
-        """Track workshop tools and equipment"""
-        try:
-            tools = {
-                "3D Printer": self.workshop["3d_printer_status"],
-                "Fabrication Units": self.workshop["fabrication_units"],
-                "DUM-E": self.workshop["robotic_assistants"]["DUM-E"]["status"],
-                "U": self.workshop["robotic_assistants"]["U"]["status"],
-                "BUTTERFINGERS": self.workshop["robotic_assistants"]["BUTTERFINGERS"]["status"]
-            }
-            
-            status_report = []
-            for tool, status in tools.items():
-                status_report.append(f"{tool}: {status}")
-            
-            self.speak("Workshop tool status:")
-            for report in status_report:
-                self.speak(report)
-                
-        except Exception as e:
-            self.logger.error(f"Tool tracking error: {e}")
-            self.speak("Error accessing tool tracking systems")
-
-    def quick_calculation(self, formula=None):
-        """Quick engineering calculations"""
-        try:
-            if not formula:
-                self.speak("What's the calculation, boss?")
-                formula = self.listen()
-            
-            # Clean up the formula
-            formula = formula.lower().replace('x', '*')
-            formula = formula.replace('divided by', '/')
-            formula = formula.replace('times', '*')
-            formula = formula.replace('plus', '+')
-            formula = formula.replace('minus', '-')
-            
-            # Evaluate the formula
-            result = eval(formula)
-            self.speak(f"The result is {result}")
-            
-            # Store calculation in memory
-            if hasattr(self, 'memory') and self.memory:
-                self.memory.remember('calculations', {
-                    'formula': formula,
-                    'result': result,
-                    'project': self.current_project
-                })
-            
-            return result
-            
-        except Exception as e:
-            self.logger.error(f"Calculation error: {e}")
-            self.speak("Error performing calculation. Please try again.")
+            self.logger.error(f"Calculation failed: {e}")
             return None
 
-class SuitInterface:
-    """Advanced interface for Iron Man suits"""
-    def __init__(self):
-        self.active_suits = {}
-        self.deployment_systems = {
-            "Hall of Armor": {"status": "READY", "capacity": 10},
-            "Suitcase": {"status": "READY", "type": "Mark V"},
-            "Orbital": {"status": "STANDBY", "satellites": 4}
-        }
-        self.current_suit = None
-        self.suit_systems = self._init_suit_systems()
+    def generate_technical_drawing(self, model_path, output_format="pdf"):
+        """Generate technical drawings from 3D models"""
+        try:
+            # Load the 3D model
+            model = self._load_3d_model(model_path)
+            
+            # Generate views
+            views = self._generate_standard_views(model)
+            
+            # Add dimensions
+            self._add_dimensions(views)
+            
+            # Export drawing
+            output_path = self._export_drawing(views, output_format)
+            
+            return output_path
+            
+        except Exception as e:
+            self.logger.error(f"Drawing generation failed: {e}")
+            return None
+
+class DevOpsIntegration:
+    """Development and Operations Integration"""
+    def __init__(self, jarvis_instance):
+        self.jarvis = jarvis_instance
+        self.logger = jarvis_instance.logger
         
-        # Start suit monitoring
-        self._start_suit_monitoring()
+        # Initialize git integration
+        self.git = self.init_git_integration()
         
-    def _init_suit_systems(self):
-        """Initialize suit systems"""
-        return {
-            "power": {
-                "arc_reactor": {"output": 100, "efficiency": 98.5},
-                "backup_power": {"status": "STANDBY", "charge": 100}
-            },
-            "life_support": {
-                "oxygen_levels": 100,
-                "pressure": "NORMAL",
-                "temperature": 20.5
-            },
-            "weapons": {
-                "repulsors": {"status": "READY", "power": 100},
-                "unibeam": {"status": "CHARGED", "power": 100},
-                "missiles": {"count": 12, "status": "ARMED"}
-            },
-            "flight_systems": {
-                "thrusters": {"status": "READY", "power": 100},
-                "stabilizers": {"status": "ACTIVE"},
-                "navigation": {"mode": "AI_ASSISTED"}
-            },
-            "defense": {
-                "shields": {"status": "READY", "power": 100},
-                "armor_integrity": 100,
-                "countermeasures": {"flares": 24, "chaff": 12}
-            },
-            "ai_systems": {
-                "targeting": {"status": "ACTIVE", "accuracy": 98.5},
-                "threat_assessment": {"status": "ACTIVE", "range": "50km"},
-                "neural_link": {"status": "STANDBY", "latency": "0.001ms"}
+        # Setup CI/CD monitoring
+        self.ci_cd = self.init_ci_cd_monitoring()
+        
+        # Initialize docker integration
+        self.docker = self.init_docker_integration()
+
+    def deploy_project(self, project_name, environment="development"):
+        """Handle project deployment"""
+        try:
+            # Get project configuration
+            project = self.jarvis.project_manager.get_project(project_name)
+            
+            # Run pre-deployment checks
+            if not self._run_deployment_checks(project):
+                raise Exception("Pre-deployment checks failed")
+            
+            # Build docker container
+            container_id = self._build_container(project)
+            
+            # Run tests
+            if not self._run_tests(container_id):
+                raise Exception("Tests failed")
+            
+            # Deploy
+            self._deploy_container(container_id, environment)
+            
+            self.jarvis.speak(f"Project {project_name} deployed to {environment}")
+            
+        except Exception as e:
+            self.logger.error(f"Deployment failed: {e}")
+            self.jarvis.speak("Deployment failed")
+
+    def monitor_services(self):
+        """Monitor running services and containers"""
+        try:
+            # Check docker containers
+            containers = self.docker.containers.list()
+            
+            # Check service health
+            for container in containers:
+                health = container.attrs['State']['Health']['Status']
+                if health != 'healthy':
+                    self.jarvis.speak(f"Warning: Container {container.name} is {health}")
+            
+            # Monitor resource usage
+            self._check_resource_usage()
+            
+        except Exception as e:
+            self.logger.error(f"Service monitoring failed: {e}")
+
+class EmailManager:
+    """Advanced email management system"""
+    def __init__(self, jarvis_instance):
+        self.jarvis = jarvis_instance
+        self.logger = jarvis_instance.logger
+        self.email_config_file = 'config/email_config.json'
+        self.email_cache = {}
+        self.last_check = None
+        
+        # Load email configuration
+        self.load_config()
+        
+    def load_config(self):
+        """Load email configuration"""
+        try:
+            with open(self.email_config_file, 'r') as f:
+                self.config = json.load(f)
+        except FileNotFoundError:
+            self.jarvis.speak("Email configuration not found. Would you like to set up email integration?")
+            # Could add interactive setup here
+            self.config = {}
+
+    def check_emails(self, folder="inbox"):
+        """Check for new emails"""
+        try:
+            import imaplib
+            import email
+            from email.header import decode_header
+            
+            # Connect to email server
+            mail = imaplib.IMAP4_SSL(self.config.get('imap_server', 'imap.gmail.com'))
+            mail.login(self.config['email'], self.config['password'])
+            
+            # Select folder
+            mail.select(folder)
+            
+            # Search for unread emails
+            _, messages = mail.search(None, 'UNSEEN')
+            
+            if not messages[0]:
+                self.jarvis.speak("No new emails, boss")
+                return []
+            
+            new_emails = []
+            for num in messages[0].split():
+                _, msg = mail.fetch(num, '(RFC822)')
+                email_body = msg[0][1]
+                email_message = email.message_from_bytes(email_body)
+                
+                subject = decode_header(email_message["Subject"])[0][0]
+                sender = decode_header(email_message.get("From"))[0][0]
+                
+                if isinstance(subject, bytes):
+                    subject = subject.decode()
+                if isinstance(sender, bytes):
+                    sender = sender.decode()
+                
+                new_emails.append({
+                    "subject": subject,
+                    "sender": sender,
+                    "id": num,
+                    "full_message": email_message
+                })
+            
+            count = len(new_emails)
+            self.jarvis.speak(f"You have {count} new {'email' if count == 1 else 'emails'}")
+            
+            # Cache the results
+            self.email_cache = {
+                'timestamp': datetime.now(),
+                'emails': new_emails
             }
-        }
             
-    def deploy_suit(self, suit_name, deployment_method="Hall of Armor"):
-        """Deploy specified Iron Man suit with advanced checks"""
+            return new_emails
+            
+        except Exception as e:
+            self.logger.error(f"Email check failed: {e}")
+            self.jarvis.speak("Unable to check emails. Please verify your email configuration.")
+            return []
+
+    def summarize_emails(self, emails=None):
+        """Summarize emails for voice output"""
         try:
-            if suit_name in self.active_suits:
-                if self.deployment_systems[deployment_method]["status"] != "READY":
-                    raise Exception(f"{deployment_method} not ready for deployment")
+            if emails is None:
+                if not self.email_cache:
+                    emails = self.check_emails()
+                else:
+                    emails = self.email_cache['emails']
+            
+            if not emails:
+                return
+            
+            self.jarvis.speak("Here's a summary of your new emails:")
+            for i, email in enumerate(emails, 1):
+                self.jarvis.speak(f"Email {i}: From {email['sender']}, Subject: {email['subject']}")
                 
-                self.current_suit = suit_name
-                self._initialize_suit_systems(suit_name)
+            self.jarvis.speak("Would you like me to read any of these emails in full?")
+            
+        except Exception as e:
+            self.logger.error(f"Email summarization failed: {e}")
+            self.jarvis.speak("Error summarizing emails")
+
+    def read_email(self, email_index):
+        """Read full email content"""
+        try:
+            if not self.email_cache or not self.email_cache['emails']:
+                self.jarvis.speak("No emails in cache. Let me check for new ones.")
+                self.check_emails()
+            
+            if not self.email_cache['emails']:
+                return
+            
+            emails = self.email_cache['emails']
+            if email_index < 1 or email_index > len(emails):
+                self.jarvis.speak("Invalid email number")
+                return
+            
+            email = emails[email_index - 1]
+            message = email['full_message']
+            
+            # Get email body
+            body = ""
+            if message.is_multipart():
+                for part in message.walk():
+                    if part.get_content_type() == "text/plain":
+                        body = part.get_payload(decode=True).decode()
+                        break
+            else:
+                body = message.get_payload(decode=True).decode()
+            
+            self.jarvis.speak(f"Reading email from {email['sender']}")
+            self.jarvis.speak(f"Subject: {email['subject']}")
+            self.jarvis.speak("Message body:")
+            self.jarvis.speak(body)
+            
+        except Exception as e:
+            self.logger.error(f"Email reading failed: {e}")
+            self.jarvis.speak("Error reading email")
+
+class SocialMediaMonitor:
+    """Social media monitoring and interaction"""
+    def __init__(self, jarvis_instance):
+        self.jarvis = jarvis_instance
+        self.logger = jarvis_instance.logger
+        self.cache = {}
+        self.cache_duration = 300  # 5 minutes
+        
+        # Load Twitter/X API credentials
+        self.load_credentials()
+
+    def get_trending_topics(self, location="worldwide"):
+        """Get trending topics from Twitter/X"""
+        try:
+            # Check cache first
+            cache_key = f"trends_{location}"
+            if cache_key in self.cache:
+                cache_time, cached_data = self.cache[cache_key]
+                if time.time() - cache_time < self.cache_duration:
+                    return cached_data
+
+            # If no cache, fetch from web
+            import requests
+            from bs4 import BeautifulSoup
+            
+            # Use Nitter as an alternative to Twitter API
+            url = "https://nitter.net/trending"
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            
+            response = requests.get(url, headers=headers)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            trends = []
+            trend_items = soup.find_all('div', {'class': 'trending-card'})
+            
+            for item in trend_items[:10]:  # Get top 10 trends
+                trend_text = item.get_text().strip()
+                if trend_text:
+                    trends.append(trend_text)
+            
+            # Cache the results
+            self.cache[cache_key] = (time.time(), trends)
+            
+            # Speak the trends
+            self.jarvis.speak("Here are the current trending topics:")
+            for i, trend in enumerate(trends, 1):
+                self.jarvis.speak(f"{i}. {trend}")
+            
+            return trends
+            
+        except Exception as e:
+            self.logger.error(f"Failed to fetch trending topics: {e}")
+            self.jarvis.speak("I couldn't fetch the trending topics. Would you like me to show you the news instead?")
+            return None
+
+    def get_news(self):
+        """Fallback method to get news headlines"""
+        try:
+            import requests
+            
+            url = "https://newsapi.org/v2/top-headlines"
+            params = {
+                "country": "us",
+                "apiKey": self.config.get("news_api_key")
+            }
+            
+            response = requests.get(url, params=params)
+            news = response.json()
+            
+            if news.get("status") == "ok":
+                articles = news.get("articles", [])[:5]
+                self.jarvis.speak("Here are the top news headlines:")
+                for i, article in enumerate(articles, 1):
+                    self.jarvis.speak(f"{i}. {article['title']}")
                 
-                # Run pre-flight checks
-                checks = self._run_preflight_checks()
-                if not all(checks.values()):
-                    failed_systems = [k for k, v in checks.items() if not v]
-                    raise Exception(f"Pre-flight checks failed for systems: {failed_systems}")
-                
-                return f"Deploying {suit_name} via {deployment_method}. All systems online."
-            return f"Error: {suit_name} not found in database."
         except Exception as e:
-            return f"Deployment failed: {str(e)}"
-            
-    def _initialize_suit_systems(self, suit_name):
-        """Initialize all suit systems for deployment"""
-        try:
-            # Power up sequence
-            self.suit_systems["power"]["arc_reactor"]["output"] = 100
-            self.suit_systems["power"]["backup_power"]["status"] = "STANDBY"
-            
-            # Boot up defensive systems
-            self.suit_systems["defense"]["shields"]["status"] = "READY"
-            self.suit_systems["defense"]["armor_integrity"] = 100
-            
-            # Initialize weapons
-            self.suit_systems["weapons"]["repulsors"]["status"] = "READY"
-            self.suit_systems["weapons"]["unibeam"]["status"] = "CHARGING"
-            
-            # Start flight systems
-            self.suit_systems["flight_systems"]["thrusters"]["status"] = "READY"
-            self.suit_systems["flight_systems"]["stabilizers"]["status"] = "ACTIVE"
-            
-            # Boot AI systems
-            self.suit_systems["ai_systems"]["targeting"]["status"] = "ACTIVE"
-            self.suit_systems["ai_systems"]["neural_link"]["status"] = "INITIALIZING"
-            
-            return True
-        except Exception as e:
-            logging.error(f"Suit initialization error: {e}")
-            return False
-            
-    def _run_preflight_checks(self):
-        """Run comprehensive pre-flight system checks"""
-        checks = {
-            "power": self._check_power_systems(),
-            "weapons": self._check_weapons_systems(),
-            "flight": self._check_flight_systems(),
-            "life_support": self._check_life_support(),
-            "defense": self._check_defense_systems(),
-            "ai": self._check_ai_systems()
-        }
-        return checks
-        
-    def _check_power_systems(self):
-        """Check power systems status"""
-        try:
-            arc_reactor = self.suit_systems["power"]["arc_reactor"]
-            return arc_reactor["output"] >= 85 and arc_reactor["efficiency"] >= 90
-        except Exception as e:
-            logging.error(f"Power systems check failed: {e}")
-            return False
-            
-    def _check_weapons_systems(self):
-        """Check weapons systems status"""
-        try:
-            weapons = self.suit_systems["weapons"]
-            return (weapons["repulsors"]["status"] == "READY" and
-                    weapons["missiles"]["count"] > 0)
-        except Exception as e:
-            logging.error(f"Weapons systems check failed: {e}")
-            return False
-            
-    def _check_flight_systems(self):
-        """Check flight systems status"""
-        try:
-            flight = self.suit_systems["flight_systems"]
-            return (flight["thrusters"]["status"] == "READY" and
-                    flight["stabilizers"]["status"] == "ACTIVE")
-        except Exception as e:
-            logging.error(f"Flight systems check failed: {e}")
-            return False
-            
-    def _check_life_support(self):
-        """Check life support systems"""
-        try:
-            life = self.suit_systems["life_support"]
-            return (life["oxygen_levels"] > 90 and
-                    life["pressure"] == "NORMAL")
-        except Exception as e:
-            logging.error(f"Life support check failed: {e}")
-            return False
-            
-    def _check_defense_systems(self):
-        """Check defense systems status"""
-        try:
-            defense = self.suit_systems["defense"]
-            return (defense["shields"]["status"] == "READY" and
-                    defense["armor_integrity"] > 90)
-        except Exception as e:
-            logging.error(f"Defense systems check failed: {e}")
-            return False
-            
-    def _check_ai_systems(self):
-        """Check AI systems status"""
-        try:
-            ai = self.suit_systems["ai_systems"]
-            return (ai["targeting"]["status"] == "ACTIVE" and
-                    ai["threat_assessment"]["status"] == "ACTIVE")
-        except Exception as e:
-            logging.error(f"AI systems check failed: {e}")
-            return False
-            
-    def _start_suit_monitoring(self):
-        """Start suit monitoring in separate thread"""
-        try:
-            threading.Thread(target=self._monitor_suit_systems, daemon=True).start()
-        except Exception as e:
-            logging.error(f"Failed to start suit monitoring: {e}")
-            
-    def _monitor_suit_systems(self):
-        """Monitor all suit systems in real-time"""
-        while True:
-            try:
-                if self.current_suit:
-                    # Monitor power systems
-                    self._monitor_power()
-                    
-                    # Monitor flight systems
-                    self._monitor_flight()
-                    
-                    # Monitor life support
-                    self._monitor_life_support()
-                    
-                    # Monitor defense systems
-                    self._monitor_defense()
-                    
-                    # Update AI systems
-                    self._update_ai_systems()
-                    
-                time.sleep(0.1)  # 100ms monitoring interval
-            except Exception as e:
-                logging.error(f"Suit monitoring error: {e}")
-                time.sleep(1)
-                
-    def _monitor_power(self):
-        """Monitor power systems"""
-        power = self.suit_systems["power"]["arc_reactor"]
-        if power["output"] < 50:
-            self._trigger_power_warning()
-            
-    def _monitor_flight(self):
-        """Monitor flight systems"""
-        flight = self.suit_systems["flight_systems"]
-        if flight["thrusters"]["power"] < 60:
-            self._trigger_flight_warning()
-            
-    def _monitor_life_support(self):
-        """Monitor life support systems"""
-        life = self.suit_systems["life_support"]
-        if life["oxygen_levels"] < 80:
-            self._trigger_life_support_warning()
-            
-    def _monitor_defense(self):
-        """Monitor defense systems"""
-        defense = self.suit_systems["defense"]
-        if defense["armor_integrity"] < 70:
-            self._trigger_defense_warning()
-            
-    def _update_ai_systems(self):
-        """Update AI systems"""
-        ai = self.suit_systems["ai_systems"]
-        ai["targeting"]["accuracy"] = min(100, ai["targeting"]["accuracy"] + 0.1)
-        
-    def _trigger_power_warning(self):
-        """Handle power system warnings"""
-        logging.warning("Power levels critical")
-        self.suit_systems["power"]["backup_power"]["status"] = "ACTIVE"
-        
-    def _trigger_flight_warning(self):
-        """Handle flight system warnings"""
-        logging.warning("Flight system power low")
-        self.suit_systems["flight_systems"]["navigation"]["mode"] = "EMERGENCY"
-        
-    def _trigger_life_support_warning(self):
-        """Handle life support warnings"""
-        logging.warning("Life support levels critical")
-        self.suit_systems["life_support"]["pressure"] = "EMERGENCY"
-        
-    def _trigger_defense_warning(self):
-        """Handle defense system warnings"""
-        logging.warning("Armor integrity compromised")
-        self.suit_systems["defense"]["shields"]["power"] = 100
+            self.logger.error(f"Failed to fetch news: {e}")
+            self.jarvis.speak("I'm having trouble accessing the news right now.")
 
 if __name__ == "__main__":
-    try:
-        jarvis = JarvisAssistant()
-        jarvis.speak("JARVIS Mark 1 online. Arc reactor functioning at optimal levels.")
-        
-        # Activate workshop mode with error handling
-        jarvis.toggle_workshop_mode()
-        
-        # Deploy a suit with error handling
-        try:
-            status = jarvis.suit_interface.deploy_suit("Mark III")
-            jarvis.speak(status)
-        except Exception as e:
-            jarvis.logger.error(f"Suit deployment error: {e}")
-            jarvis.speak("Suit deployment systems offline")
-        
-        # Monitor arc reactor
-        try:
-            reactor_status = jarvis.power_management["current_output"]
-            jarvis.speak(f"Arc reactor currently operating at {reactor_status}% capacity")
-        except Exception as e:
-            jarvis.logger.error(f"Power monitoring error: {e}")
-            jarvis.speak("Arc reactor monitoring systems need calibration")
-            
-        # Start main loop
-        jarvis.run()
-        
-    except Exception as e:
-        print(f"Critical system error: {e}")
-        if 'jarvis' in locals():
-            jarvis.logger.error(f"Critical system error: {e}")
-            jarvis.speak("Critical system failure. Initiating emergency shutdown.")
+    jarvis = JarvisAssistant()
+    jarvis.run()
