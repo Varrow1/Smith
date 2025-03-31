@@ -8,11 +8,11 @@ psutil==5.9.8
 PyYAML==6.0.1
 
 # Audio control
-pycaw==20240225
+pycaw==20240210
 keyboard==0.13.5
 
 # Media and streaming
-spotify-local==0.3.5
+spotify-local==0.3.2
 wikipedia==1.4.0
 
 # Research and web

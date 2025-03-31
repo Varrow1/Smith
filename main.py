@@ -672,7 +672,7 @@ class JarvisAssistant:
             Remove any polite phrases or extra words from parameters.
             Only respond with the JSON object, nothing else."""
 
-            response = self.ollama.chat(model='llama3.2:1b-instruct-q5_0', messages=[
+            response = self.ollama.chat(model='tinyllama', messages=[
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user', 'content': f"Interpret this command: {command}"}
             ])

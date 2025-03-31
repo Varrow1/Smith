@@ -54,12 +54,127 @@
       "speaker": "jarvis",
       "text": "Systems online and ready to assist, boss. How can I help you today?",
       "timestamp": "2025-03-31 20:44:55.890555"
+    },
+    {
+      "speaker": "jarvis",
+      "text": "Ollama AI backup systems initialized",
+      "timestamp": "2025-03-31 21:47:04.573164"
+    },
+    {
+      "speaker": "jarvis",
+      "text": "JARVIS Mark 1 online. Ready to assist you in the workshop, boss.",
+      "timestamp": "2025-03-31 21:47:07.477941"
+    },
+    {
+      "speaker": "jarvis",
+      "text": "AI systems connected. You can now talk to me conversationally.",
+      "timestamp": "2025-03-31 21:47:12.754768"
+    },
+    {
+      "speaker": "user",
+      "text": "volume down volume down",
+      "timestamp": "2025-03-31 21:47:35.499987"
+    },
+    {
+      "speaker": "jarvis",
+      "text": "Volume set to 90%",
+      "timestamp": "2025-03-31 21:47:52.335306"
+    },
+    {
+      "speaker": "jarvis",
+      "text": "Could you repeat that? My audio processing isn't as good as it will be in Mark 2.",
+      "timestamp": "2025-03-31 21:47:57.915927"
+    },
+    {
+      "speaker": "user",
+      "text": "volume down",
+      "timestamp": "2025-03-31 21:48:10.813285"
+    },
+    {
+      "speaker": "jarvis",
+      "text": "Volume set to 80%",
+      "timestamp": "2025-03-31 21:48:12.776543"
+    },
+    {
+      "speaker": "jarvis",
+      "text": "Could you repeat that? My audio processing isn't as good as it will be in Mark 2.",
+      "timestamp": "2025-03-31 21:48:18.703351"
+    },
+    {
+      "speaker": "user",
+      "text": "set volume to 50%",
+      "timestamp": "2025-03-31 21:48:28.643778"
+    },
+    {
+      "speaker": "jarvis",
+      "text": "Volume set to 0%",
+      "timestamp": "2025-03-31 21:48:31.227477"
+    },
+    {
+      "speaker": "jarvis",
+      "text": "Ollama AI backup systems initialized",
+      "timestamp": "2025-03-31 21:49:24.163275"
+    },
+    {
+      "speaker": "jarvis",
+      "text": "JARVIS Mark 1 online. Ready to assist you in the workshop, boss.",
+      "timestamp": "2025-03-31 21:49:27.067389"
+    },
+    {
+      "speaker": "jarvis",
+      "text": "AI systems connected. You can now talk to me conversationally.",
+      "timestamp": "2025-03-31 21:49:32.337534"
+    },
+    {
+      "speaker": "user",
+      "text": "set volume to 50",
+      "timestamp": "2025-03-31 21:49:45.252050"
+    },
+    {
+      "speaker": "jarvis",
+      "text": "Volume set to 50%",
+      "timestamp": "2025-03-31 21:49:47.071907"
+    },
+    {
+      "speaker": "jarvis",
+      "text": "Ollama AI backup systems initialized",
+      "timestamp": "2025-03-31 21:50:03.648417"
+    },
+    {
+      "speaker": "jarvis",
+      "text": "JARVIS Mark 1 online. Ready to assist you in the workshop, boss.",
+      "timestamp": "2025-03-31 21:50:06.555955"
+    },
+    {
+      "speaker": "jarvis",
+      "text": "AI systems connected. You can now talk to me conversationally.",
+      "timestamp": "2025-03-31 21:50:11.837530"
+    },
+    {
+      "speaker": "user",
+      "text": "play",
+      "timestamp": "2025-03-31 21:50:23.754243"
+    },
+    {
+      "speaker": "jarvis",
+      "text": "Media play command executed",
+      "timestamp": "2025-03-31 21:50:25.695385"
+    },
+    {
+      "speaker": "user",
+      "text": "play",
+      "timestamp": "2025-03-31 21:50:39.533352"
+    },
+    {
+      "speaker": "jarvis",
+      "text": "Media play command executed",
+      "timestamp": "2025-03-31 21:50:40.634633"
     }
   ],
   "user_preferences": {},
   "tasks": [],
   "reminders": [],
-  "last_active": "2025-03-31 20:45:04.669324",
+  "last_active": "2025-03-31 21:50:44.808795",
   "project_data": {},
   "workshop_notes": [],
   "important_dates": {}
